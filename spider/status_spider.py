@@ -13,6 +13,8 @@ class BiliMallStatusSpider:
         self.error_sleep = 30  # 错误重试休眠时间(秒)
         self.fatal_sleep = 60  # 严重错误休眠时间(秒)
         self.round_sleep = 1800  # 每轮结束后的休眠时间(秒)，默认30分钟
+        self.max_retry_sleep = 7200  # 最大重试休眠时间(秒)，默认2小时
+        self.retry_multiplier = 2  # 重试时间翻倍系数
         self.url = 'https://mall.bilibili.com/mall-magic-c/internet/c2c/items/queryC2cItemsDetail'
         self.headers = {
             'accept': 'application/json, text/plain, */*',
@@ -152,6 +154,7 @@ class BiliMallStatusSpider:
             updated_count = 0
             status_changed = 0
             error_count = 0
+            current_retry_sleep = self.error_sleep  # 当前重试休眠时间
             
             print(f"找到 {total_items} 个在售商品，按SKU分组并优先检查最低价商品")
             
@@ -178,20 +181,33 @@ class BiliMallStatusSpider:
                         else:  # 状态未变化，仍为在售状态
                             self.update_check_time(item_id)
                         updated_count += 1
+                        error_count = 0  # 重置错误计数
+                        current_retry_sleep = self.error_sleep  # 重置重试时间
                     else:
                         error_count += 1
                         print(f"获取商品 {item_id} 状态失败")
                     
                     # 如果连续错误过多，增加休眠时间
                     if error_count >= 3:
-                        print(f"连续出错 {error_count} 次，休眠 {self.fatal_sleep} 秒...")
-                        time.sleep(self.fatal_sleep)
+                        print(f"连续出错 {error_count} 次，休眠 {current_retry_sleep} 秒...")
+                        time.sleep(current_retry_sleep)
+                        # 计算下一次重试时间
+                        current_retry_sleep = min(
+                            current_retry_sleep * self.retry_multiplier,
+                            self.max_retry_sleep
+                        )
+                        print(f"下次重试休眠时间将增加到: {current_retry_sleep} 秒")
                         error_count = 0
                     
                 except Exception as e:
                     print(f"处理商品 {item_id} 时出错: {e}")
                     error_count += 1
-                    time.sleep(self.error_sleep)
+                    time.sleep(current_retry_sleep)
+                    # 计算下一次重试时间
+                    current_retry_sleep = min(
+                        current_retry_sleep * self.retry_multiplier,
+                        self.max_retry_sleep
+                    )
                     continue
             
             end_time = datetime.now()
@@ -206,7 +222,10 @@ class BiliMallStatusSpider:
             
             # 根据错误数量动态调整休眠时间
             if error_count > 0:
-                adjusted_sleep = min(self.round_sleep * 2, 7200)  # 最多2小时
+                adjusted_sleep = min(
+                    self.round_sleep * self.retry_multiplier,
+                    self.max_retry_sleep
+                )
                 print(f"由于存在错误，增加休眠时间到 {adjusted_sleep} 秒({adjusted_sleep/60:.1f}分钟)")
                 time.sleep(adjusted_sleep)
             else:
@@ -228,6 +247,8 @@ if __name__ == "__main__":
     parser.add_argument('--error-sleep', type=int, default=30, help='错误重试休眠时间(秒)，默认30秒')
     parser.add_argument('--fatal-sleep', type=int, default=60, help='严重错误休眠时间(秒)，默认60秒')
     parser.add_argument('--round-sleep', type=int, default=1800, help='每轮结束后的休眠时间(秒)，默认1800秒')
+    parser.add_argument('--max-retry-sleep', type=int, default=7200, help='最大重试休眠时间(秒)，默认7200秒')
+    parser.add_argument('--retry-multiplier', type=float, default=2.0, help='重试时间翻倍系数，默认2.0')
     args = parser.parse_args()
 
     spider = BiliMallStatusSpider(cookie=args.cookie)
@@ -236,6 +257,8 @@ if __name__ == "__main__":
     spider.error_sleep = args.error_sleep
     spider.fatal_sleep = args.fatal_sleep
     spider.round_sleep = args.round_sleep
+    spider.max_retry_sleep = args.max_retry_sleep
+    spider.retry_multiplier = args.retry_multiplier
     
     try:
         spider.run()
