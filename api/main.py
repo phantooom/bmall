@@ -42,6 +42,7 @@ class ItemDetail(BaseModel):
     price: float
     market_price: float
     url: str
+    publish_status: int
 
 class SkuListResponse(BaseModel):
     items: List[SkuInfo]
@@ -215,7 +216,8 @@ async def get_sku_items(sku_id: int):
                 i.uface as seller_avatar,
                 i.uspace_jump_url as seller_url,
                 i.price,
-                s.market_price
+                s.market_price,
+                i.publish_status
             FROM c2c_items i
             JOIN skus s ON i.sku_id = s.sku_id
             WHERE i.sku_id = ?
@@ -253,7 +255,8 @@ async def get_sku_items(sku_id: int):
                 "seller_url": seller_url,
                 "price": row['price'],
                 "market_price": row['market_price'],
-                "url": f"{base_url}{row['c2c_items_id']}"
+                "url": f"{base_url}{row['c2c_items_id']}",
+                "publish_status": row['publish_status']
             })
         
         return results

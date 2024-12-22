@@ -14,6 +14,12 @@
               <div class="seller-info-row">
                 <span class="seller-name">{{ scope.row.seller_name }}</span>
                 <span class="seller-uid">UID: {{ scope.row.seller_uid }}</span>
+                <el-tag 
+                  :type="scope.row.publish_status === 1 ? 'success' : 'danger'"
+                  size="small"
+                >
+                  {{ scope.row.publish_status === 1 ? '在售' : '已下架' }}
+                </el-tag>
               </div>
               <template v-if="scope.row.seller_url">
                 <el-link
@@ -45,8 +51,9 @@
             type="primary"
             size="small"
             @click="openItemUrl(scope.row.url)"
+            :type="scope.row.publish_status === 1 ? 'primary' : 'warning'"
           >
-            查看商品
+            {{ scope.row.publish_status === 1 ? '查看商品' : '查看链接' }}
           </el-button>
           <el-button
             v-if="scope.row.seller_url"
@@ -140,5 +147,17 @@ const openSellerUrl = (url: string) => {
 
 :deep(.el-table__header) {
   font-weight: 600;
+}
+
+:deep(.el-tag) {
+  margin-left: 4px;
+}
+
+:deep(.el-tag--success) {
+  background-color: var(--el-color-success-light-9);
+}
+
+:deep(.el-tag--danger) {
+  background-color: var(--el-color-danger-light-9);
 }
 </style> 

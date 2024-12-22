@@ -14,6 +14,7 @@ class BiliMallSpider:
         self.max_sleep = 5  # 最大休眠时间(秒)
         self.error_sleep = 30  # 错误重试休眠时间(秒)
         self.fatal_sleep = 60  # 严重错误休眠时间(秒)
+        self.round_sleep = 300  # 每轮结束后的休眠时间(秒)，默认5分钟
         self.url = 'https://mall.bilibili.com/mall-magic-c/internet/c2c/v2/list'
         self.headers = {
             'accept': 'application/json, text/plain, */*',
@@ -80,6 +81,7 @@ class BiliMallSpider:
             uspace_jump_url TEXT,
             uface TEXT,
             uname TEXT,
+            publish_status INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (brand_id) REFERENCES brands(id),
             FOREIGN KEY (sku_id) REFERENCES skus(sku_id)
@@ -142,9 +144,16 @@ class BiliMallSpider:
         return None
 
     def check_item_exists(self, item_id):
-        """检查商品是否已存在"""
-        self.cursor.execute('SELECT id FROM c2c_items WHERE id = ?', (item_id,))
-        return self.cursor.fetchone() is not None
+        """检查商品是否已存在，并返回当前信息"""
+        self.cursor.execute('''
+            SELECT 
+                id, price, show_price, show_market_price, 
+                uid, uname, uface, uspace_jump_url,
+                total_items_count, payment_time, is_my_publish
+            FROM c2c_items 
+            WHERE id = ?
+        ''', (item_id,))
+        return self.cursor.fetchone()
 
     def fetch_data(self, next_id=None):
         """获取数据"""
@@ -191,11 +200,42 @@ class BiliMallSpider:
         """保存数据到数据库"""
         try:
             # 检查是否已存在
-            if self.check_item_exists(item['c2cItemsId']):
+            existing_item = self.check_item_exists(item['c2cItemsId'])
+            
+            # 检查是否有多个SKU
+            if len(item['detailDtoList']) > 1:
+                print(f"商品 {item['c2cItemsId']} 包含多个SKU，跳过")
                 return False
             
             # 匹配品牌
             brand_id = self.match_brand(item['c2cItemsName'])
+            
+            # 如果商品已存在，检查是否需要更新
+            if existing_item:
+                needs_update = False
+                fields_to_check = [
+                    ('price', float(item['price']) / 100),
+                    ('show_price', item['showPrice']),
+                    ('show_market_price', item['showMarketPrice']),
+                    ('uid', item['uid']),
+                    ('uname', item['uname']),
+                    ('uface', item['uface']),
+                    ('uspace_jump_url', item['uspaceJumpUrl']),
+                    ('total_items_count', item['totalItemsCount']),
+                    ('payment_time', item['paymentTime']),
+                    ('is_my_publish', 1 if item['isMyPublish'] else 0)
+                ]
+                
+                for idx, (field, new_value) in enumerate(fields_to_check):
+                    if existing_item[idx + 1] != new_value:  # +1 因为第一个字段是id
+                        needs_update = True
+                        print(f"字段 {field} 需要更新: {existing_item[idx + 1]} -> {new_value}")
+                
+                if not needs_update:
+                    print(f"商品 {item['c2cItemsId']} 无需更新")
+                    return False
+                else:
+                    print(f"商品 {item['c2cItemsId']} 需要更新")
             
             # 处理SKU数据
             for sku in item['detailDtoList']:
@@ -218,8 +258,8 @@ class BiliMallSpider:
                         id, type, name, brand_id, sku_id, items_id,
                         total_items_count, price, show_price, show_market_price,
                         uid, payment_time, is_my_publish, uspace_jump_url,
-                        uface, uname
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        uface, uname, publish_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     item['c2cItemsId'],
                     item['type'],
@@ -228,7 +268,7 @@ class BiliMallSpider:
                     sku['skuId'],
                     sku['itemsId'],
                     item['totalItemsCount'],
-                    float(item['price']) / 100,  # 转换为元
+                    float(item['price']) / 100,
                     item['showPrice'],
                     item['showMarketPrice'],
                     item['uid'],
@@ -236,10 +276,12 @@ class BiliMallSpider:
                     1 if item['isMyPublish'] else 0,
                     item['uspaceJumpUrl'],
                     item['uface'],
-                    item['uname']
+                    item['uname'],
+                    1  # 默认在售状态
                 ))
             
             self.conn.commit()
+            print(f"商品 {item['c2cItemsId']} {'更新' if existing_item else '新增'} 成功")
             return True
             
         except sqlite3.IntegrityError as e:
@@ -259,6 +301,8 @@ class BiliMallSpider:
             page = 0
             total_items = 0
             new_items_count = 0
+            updated_items_count = 0  # 记录更新的商品数量
+            skipped_items = 0  # 记录跳过的多SKU商品数量
             self.duplicate_count = 0  # 重置重复计数
             
             print("\n=== 开始新一轮爬取 ===")
@@ -288,8 +332,12 @@ class BiliMallSpider:
                     
                     print(f"本页获取到 {len(items)} 个商品")
                     page_new_items = 0
+                    page_skipped_items = 0
                     
                     for item in items:
+                        if len(item['detailDtoList']) > 1:
+                            page_skipped_items += 1
+                            continue
                         if self.save_to_db(item):
                             page_new_items += 1
                         total_items += 1
@@ -301,13 +349,14 @@ class BiliMallSpider:
                     else:
                         self.duplicate_count = 0
                         new_items_count += page_new_items
-                        print(f"本页新增商品数: {page_new_items}")
+                        skipped_items += page_skipped_items
+                        print(f"本页新增商品数: {page_new_items}, 跳过多SKU商品: {page_skipped_items}")
                     
                     next_id = response_data['data']['nextId']
                     page += 1
                     
                     print(f"当前进度: {page}/{max_pages} 页")
-                    print(f"已爬取商品总数: {total_items}, 新增商品数: {new_items_count}")
+                    print(f"已爬取商品总数: {total_items}, 新增商品数: {new_items_count}, 跳过多SKU商品: {skipped_items}")
                     print(f"连续重复页数: {self.duplicate_count}/{self.max_duplicate_pages}")
                     
                 except Exception as e:
@@ -329,8 +378,10 @@ class BiliMallSpider:
             print(f"总计爬取页数: {page}")
             print(f"总计商品数: {total_items}")
             print(f"新增商品数: {new_items_count}")
-            print(f"等待{self.error_sleep}秒后开始下一轮爬取...")
-            time.sleep(self.error_sleep)
+            print(f"更新商品数: {updated_items_count}")
+            print(f"跳过多SKU商品: {skipped_items}")
+            print(f"等待{self.round_sleep}秒（{self.round_sleep/60:.1f}分钟）后开始下一轮爬取...")
+            time.sleep(self.round_sleep)
 
     def close(self):
         """关闭数据库连接"""
@@ -348,6 +399,7 @@ if __name__ == "__main__":
     parser.add_argument('--max-sleep', type=float, default=5, help='最大休眠时间(秒)，默认5秒')
     parser.add_argument('--error-sleep', type=int, default=30, help='错误重试休眠时间(秒)，默认30秒')
     parser.add_argument('--fatal-sleep', type=int, default=60, help='严重错误休眠时间(秒)，默认60秒')
+    parser.add_argument('--round-sleep', type=int, default=300, help='每轮结束后的休眠时间(秒)，默认300秒')
     args = parser.parse_args()
 
     spider = BiliMallSpider(cookie=args.cookie)
@@ -356,6 +408,7 @@ if __name__ == "__main__":
     spider.max_sleep = args.max_sleep
     spider.error_sleep = args.error_sleep
     spider.fatal_sleep = args.fatal_sleep
+    spider.round_sleep = args.round_sleep
     try:
         spider.run(max_pages=args.pages)
     finally:

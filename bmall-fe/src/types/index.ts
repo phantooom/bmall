@@ -19,4 +19,5 @@ export interface ItemDetail {
   price: number
   market_price: number
   url: string
+  publish_status: number
 } 
