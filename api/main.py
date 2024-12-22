@@ -87,32 +87,40 @@ async def get_sku_list(
         
         # 先获取总数
         count_query = """
-            SELECT COUNT(DISTINCT s.sku_id) as total
-            FROM skus s
-            WHERE EXISTS (
-                SELECT 1 
-                FROM c2c_items i 
-                WHERE i.sku_id = s.sku_id
+            SELECT COUNT(*) as total
+            FROM (
+                SELECT DISTINCT s.sku_id
+                FROM skus s
+                JOIN c2c_items i ON i.sku_id = s.sku_id
+                WHERE 1=1
                 {brand_filter}
+                AND (? IS NULL OR s.name LIKE ?)
             )
-            AND (? IS NULL OR s.name LIKE ?)
         """
         
         # 主查询
         base_query = """
+            WITH filtered_items AS (
+                SELECT 
+                    i.sku_id,
+                    i.price,
+                    i.id
+                FROM c2c_items i
+                WHERE 1=1
+                {brand_filter}
+            ),
             WITH sku_stats AS (
                 SELECT 
                     s.sku_id,
                     s.name,
                     s.img,
                     s.market_price,
-                    MIN(i.price) as min_price,
-                    MAX(i.price) as max_price,
-                    COUNT(i.id) as total_items
+                    MIN(fi.price) as min_price,
+                    MAX(fi.price) as max_price,
+                    COUNT(fi.id) as total_items
                 FROM skus s
-                JOIN c2c_items i ON i.sku_id = s.sku_id
+                JOIN filtered_items fi ON fi.sku_id = s.sku_id
                 WHERE 1=1
-                {brand_filter}
                 AND (? IS NULL OR s.name LIKE ?)
                 GROUP BY s.sku_id, s.name, s.img, s.market_price
             )
@@ -125,6 +133,7 @@ async def get_sku_list(
                 max_price,
                 total_items
             FROM sku_stats
+            WHERE total_items > 0
             ORDER BY total_items DESC
             LIMIT ? OFFSET ?
         """
