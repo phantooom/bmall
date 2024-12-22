@@ -3,7 +3,7 @@ import sqlite3
 def add_publish_status_field():
     """添加商品发布状态字段"""
     try:
-        conn = sqlite3.connect('bilibili_mall.db')
+        conn = sqlite3.connect('./db/bilibili_mall.db')
         cursor = conn.cursor()
         
         print("开始添加 publish_status 字段...")

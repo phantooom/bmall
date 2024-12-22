@@ -17,7 +17,7 @@ app.add_middleware(
 )
 
 # 数据库连接
-DATABASE_URL = "bilibili_mall.db"
+DATABASE_URL = "./db/bilibili_mall.db"
 
 def get_db():
     conn = sqlite3.connect(DATABASE_URL)
@@ -468,19 +468,29 @@ async def delete_brand(brand_id: int):
         conn.close()
 
 @app.get("/api/status-changes")
-async def get_status_changes(page: int = 1, page_size: int = 20):
+async def get_status_changes(page: int = 1, page_size: int = 20, status: str = 'all'):
     """获取最近状态发生变更的商品"""
     try:
         conn = get_db()
         cursor = conn.cursor()
         
-        # 获取总记录数
-        cursor.execute("""
-            SELECT COUNT(DISTINCT c.id) as total
-            FROM c2c_items c
-            JOIN skus s ON c.sku_id = s.sku_id
-            WHERE c.last_check_time >= datetime('now', '-24 hours')
-                AND c.publish_status != 1
+        # 构建状态过滤条件
+        status_condition = "AND c.publish_status != 1"  # 默认排除在售商品
+        if status == 'sold':
+            status_condition = "AND c.publish_status = -2"
+        elif status == 'offline':
+            status_condition = "AND c.publish_status = -1"
+        
+        # 获取过滤后的总记录数
+        cursor.execute(f"""
+            WITH filtered_items AS (
+                SELECT DISTINCT c.id
+                FROM c2c_items c
+                JOIN skus s ON c.sku_id = s.sku_id
+                WHERE c.last_check_time >= datetime('now', '-24 hours')
+                {status_condition}
+            )
+            SELECT COUNT(*) as total FROM filtered_items
         """)
         total = cursor.fetchone()['total']
         
@@ -488,7 +498,7 @@ async def get_status_changes(page: int = 1, page_size: int = 20):
         offset = (page - 1) * page_size
         
         # 获取分页数据，添加用户信息
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT DISTINCT
                 c.id,
                 s.sku_id,
@@ -496,14 +506,14 @@ async def get_status_changes(page: int = 1, page_size: int = 20):
                 s.img,
                 c.price,
                 c.publish_status,
-                c.last_check_time,
+                datetime(c.last_check_time, '+8 hours') as last_check_time,
                 c.uname as seller_name,
                 c.uid as seller_uid,
                 c.uspace_jump_url as seller_url
             FROM c2c_items c
             JOIN skus s ON c.sku_id = s.sku_id
             WHERE c.last_check_time >= datetime('now', '-24 hours')
-                AND c.publish_status != 1
+            {status_condition}
             ORDER BY c.last_check_time DESC
             LIMIT ? OFFSET ?
         """, (page_size, offset))
@@ -598,13 +608,16 @@ async def get_blacklist(page: int = 1, page_size: int = 20):
 
 @app.get("/api/suspicious-users")
 async def get_suspicious_users():
-    """获取可疑用户列表（1小时内对同一商品上架超过20次的用户）"""
+    """获取可疑用户列表
+    1. 1小时内对同一商品上架超过20次的用户
+    2. 1小时内对3个以上SKU上架超过10次的用户
+    """
     try:
         conn = get_db()
         cursor = conn.cursor()
         
         cursor.execute("""
-            WITH user_stats AS (
+            WITH single_sku_stats AS (
                 SELECT 
                     c.uid,
                     c.uname,
@@ -616,18 +629,65 @@ async def get_suspicious_users():
                 WHERE c.created_at >= datetime('now', '-1 hour')
                 GROUP BY c.uid, c.uname, c.sku_id
                 HAVING listing_count >= 20
+            ),
+            multi_sku_stats AS (
+                SELECT 
+                    c.uid,
+                    c.uname,
+                    COUNT(DISTINCT c.sku_id) as sku_count,
+                    MIN(c.created_at) as first_listing,
+                    MAX(c.created_at) as last_listing
+                FROM c2c_items c
+                WHERE c.created_at >= datetime('now', '-1 hour')
+                GROUP BY c.uid, c.uname
+                HAVING sku_count >= 3
+                AND (
+                    SELECT COUNT(*)
+                    FROM c2c_items c2
+                    WHERE c2.uid = c.uid
+                    AND c2.created_at >= datetime('now', '-1 hour')
+                ) >= (sku_count * 10)
             )
             SELECT 
-                us.*,
+                us.uid,
+                us.uname,
+                us.sku_id,
                 s.name as sku_name,
+                us.listing_count,
+                us.first_listing,
+                us.last_listing,
                 (
                     SELECT COUNT(DISTINCT c2.sku_id)
                     FROM c2c_items c2
                     WHERE c2.uid = us.uid
                 ) as total_skus
-            FROM user_stats us
+            FROM single_sku_stats us
             JOIN skus s ON us.sku_id = s.sku_id
-            ORDER BY us.listing_count DESC
+            WHERE NOT EXISTS (
+                SELECT 1 FROM blacklist b 
+                WHERE b.uid = us.uid
+            )
+            UNION ALL
+            SELECT 
+                ms.uid,
+                ms.uname,
+                NULL as sku_id,
+                '多个商品' as sku_name,
+                (
+                    SELECT COUNT(*)
+                    FROM c2c_items c2
+                    WHERE c2.uid = ms.uid
+                    AND c2.created_at >= datetime('now', '-1 hour')
+                ) as listing_count,
+                ms.first_listing,
+                ms.last_listing,
+                ms.sku_count as total_skus
+            FROM multi_sku_stats ms
+            WHERE NOT EXISTS (
+                SELECT 1 FROM blacklist b 
+                WHERE b.uid = ms.uid
+            )
+            ORDER BY listing_count DESC
         """)
         
         results = []
@@ -662,6 +722,15 @@ async def add_to_blacklist(user: dict):
                 INSERT INTO blacklist (uid, uname, reason)
                 VALUES (?, ?, ?)
             """, (user['uid'], user['uname'], user['reason']))
+            
+            # 更新该用户所有商品的状态为-1
+            cursor.execute("""
+                UPDATE c2c_items 
+                SET publish_status = -1,
+                    is_blacklisted = 1,
+                    last_check_time = CURRENT_TIMESTAMP
+                WHERE uid = ?
+            """, (user['uid'],))
             
             cursor.execute("COMMIT")
             

@@ -3,7 +3,7 @@ import sqlite3
 def add_check_time_field():
     """添加最后检查时间字段"""
     try:
-        conn = sqlite3.connect('bilibili_mall.db')
+        conn = sqlite3.connect('./db/bilibili_mall.db')
         cursor = conn.cursor()
         
         print("开始添加 last_check_time 字段...")

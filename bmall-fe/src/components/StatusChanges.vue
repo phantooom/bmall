@@ -1,13 +1,20 @@
 <template>
   <div class="status-changes">
     <div class="header">
-      <h2>商品状态变更</h2>
+      <div class="left-controls">
+        <h2>商品状态变更</h2>
+        <el-radio-group v-model="statusFilter" size="small">
+          <el-radio-button :value="'all'">全部</el-radio-button>
+          <el-radio-button :value="'sold'">已售</el-radio-button>
+          <el-radio-button :value="'offline'">下架</el-radio-button>
+        </el-radio-group>
+      </div>
       <el-button type="primary" @click="fetchStatusChanges">
         刷新
       </el-button>
     </div>
 
-    <el-table :data="statusChanges.items" style="width: 100%" v-loading="loading">
+    <el-table :data="filteredItems" style="width: 100%" v-loading="loading">
       <el-table-column label="商品图片" width="120">
         <template #default="{ row }">
           <el-image 
@@ -66,7 +73,7 @@
       </el-table-column>
     </el-table>
 
-    <!-- 添加分页组件 -->
+    <!-- 分页组件 -->
     <div class="pagination-container">
       <el-pagination
         v-model:current-page="currentPage"
@@ -91,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import ItemList from './ItemList.vue'
@@ -129,6 +136,10 @@ const dialogVisible = ref(false)
 const currentItems = ref([])
 const currentPage = ref(1)
 const pageSize = ref(20)
+const statusFilter = ref('all')
+
+// 使用后端过滤后的商品列表
+const filteredItems = computed(() => statusChanges.value.items)
 
 const fetchStatusChanges = async () => {
   loading.value = true
@@ -136,7 +147,8 @@ const fetchStatusChanges = async () => {
     const response = await axios.get<StatusChangeResponse>('http://localhost:8000/api/status-changes', {
       params: {
         page: currentPage.value,
-        page_size: pageSize.value
+        page_size: pageSize.value,
+        status: statusFilter.value
       }
     })
     statusChanges.value = response.data
@@ -149,6 +161,7 @@ const fetchStatusChanges = async () => {
 
 const handleSizeChange = (size: number) => {
   pageSize.value = size
+  currentPage.value = 1  // 重置页码
   fetchStatusChanges()
 }
 
@@ -188,6 +201,12 @@ const getStatusText = (status: number) => {
       return '已下架'
   }
 }
+
+// 监听状态过滤器变化，重新加载数据
+watch(statusFilter, () => {
+  currentPage.value = 1  // 重置页码
+  fetchStatusChanges()
+})
 
 onMounted(() => {
   fetchStatusChanges()
@@ -241,5 +260,15 @@ h2 {
 
 :deep(.el-table .cell) {
   white-space: normal;
+}
+
+.left-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+:deep(.el-radio-button__inner) {
+  padding: 8px 16px;
 }
 </style> 

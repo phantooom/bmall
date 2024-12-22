@@ -16,7 +16,7 @@ def extract_brand_name(name):
 def update_brands():
     """更新品牌数据"""
     try:
-        conn = sqlite3.connect('bilibili_mall.db')
+        conn = sqlite3.connect('./db/bilibili_mall.db')
         cursor = conn.cursor()
         
         print("开始处理品牌数据...")

@@ -3,7 +3,7 @@ import sqlite3
 def add_indexes():
     """添加索引以优化查询性能"""
     try:
-        conn = sqlite3.connect('bilibili_mall.db')
+        conn = sqlite3.connect('./db/bilibili_mall.db')
         cursor = conn.cursor()
         
         # 创建索引的SQL语句列表

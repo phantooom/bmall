@@ -8,12 +8,12 @@ from datetime import datetime
 
 class BiliMallStatusSpider:
     def __init__(self, cookie=None):
-        self.min_sleep = 1  # 最小休眠时间(秒)
-        self.max_sleep = 3  # 最大休眠时间(秒)
+        self.min_sleep = 0.2  # 最小休眠时间(秒)
+        self.max_sleep = 0.5  # 最大休眠时间(秒)
         self.error_sleep = 30  # 错误重试休眠时间(秒)
         self.fatal_sleep = 60  # 严重错误休眠时间(秒)
-        self.round_sleep = 1800  # 每轮结束后的休眠时间(秒)，默认30分钟
-        self.max_retry_sleep = 7200  # 最大重试休眠时间(秒)，默认2小时
+        self.round_sleep = 120  # 每轮结束后的休眠时间(秒)，默认30分钟
+        self.max_retry_sleep = 120  # 最大重试休眠时间(秒)，默认2小时
         self.retry_multiplier = 2  # 重试时间翻倍系数
         self.url = 'https://mall.bilibili.com/mall-magic-c/internet/c2c/items/queryC2cItemsDetail'
         self.headers = {
@@ -28,10 +28,12 @@ class BiliMallStatusSpider:
             self.headers['cookie'] = cookie
         self.init_db()
         self.suspicious_threshold = 20  # 1小时内上架次数阈值
+        self.batch_size = 20  # 每批处理的商品数量
+        self.batch_sleep = 3  # 每批处理后的休眠时间(秒)
 
     def init_db(self):
         """初始化数据库连接"""
-        self.conn = sqlite3.connect('bilibili_mall.db')
+        self.conn = sqlite3.connect('./db/bilibili_mall.db')
         self.cursor = self.conn.cursor()
         
         # 添加 publish_status 字段（如果不存在）
@@ -50,11 +52,9 @@ class BiliMallStatusSpider:
             url = f"{self.url}?c2cItemsId={item_id}"
             
             delay = random.uniform(self.min_sleep, self.max_sleep)
-            print(f"等待 {delay:.1f} 秒后发起请求...")
             time.sleep(delay)
             
             response = requests.get(url, headers=self.headers, timeout=10)
-            print(f"请求状态码: {response.status_code}")
             
             # 处理HTTP错误
             if response.status_code != 200:
@@ -233,58 +233,68 @@ class BiliMallStatusSpider:
             
             print(f"找到 {total_items} 个在售商品，按SKU分组并优先检查最低价商品")
             
-            for idx, (item_id, sku_id, price) in enumerate(items, 1):
-                try:
-                    # 获取商品的最后检查时间
-                    self.cursor.execute('''
-                        SELECT last_check_time 
-                        FROM c2c_items 
-                        WHERE id = ?
-                    ''', (item_id,))
-                    result = self.cursor.fetchone()
-                    last_check = result[0] if result else None
-                    check_status = "从未检查" if last_check is None else f"上次检查: {last_check}"
-                    
-                    print(f"\n处理商品 {idx}/{total_items} (ID: {item_id}, SKU: {sku_id}, 价格: ¥{price:.2f}, {check_status})")
-                    status = self.fetch_item_status(item_id)
-                    
-                    if status is not None:
-                        if status != 1:  # 状态发生变化
-                            if self.update_item_status(item_id, status):
-                                status_changed += 1
-                                print(f"商品 {item_id} 状态已更新: {'在售' if status == 1 else '已下架'}")
-                        else:  # 状态未变化，仍为在售状态
-                            self.update_check_time(item_id)
-                        updated_count += 1
-                        error_count = 0  # 重置错误计数
-                        current_retry_sleep = self.error_sleep  # 重置重试时间
-                    else:
+            # 按批次处理商品
+            for i in range(0, len(items), self.batch_size):
+                batch_items = items[i:i + self.batch_size]
+                print(f"\n处理批次 {i//self.batch_size + 1}/{(total_items + self.batch_size - 1)//self.batch_size}")
+                
+                for idx, (item_id, sku_id, price) in enumerate(batch_items, i + 1):
+                    try:
+                        # 获取商品的最后检查时间
+                        self.cursor.execute('''
+                            SELECT last_check_time 
+                            FROM c2c_items 
+                            WHERE id = ?
+                        ''', (item_id,))
+                        result = self.cursor.fetchone()
+                        last_check = result[0] if result else None
+                        check_status = "从未检查" if last_check is None else f"上次检查: {last_check}"
+                        
+                        print(f"\n处理商品 {idx}/{total_items} (ID: {item_id}, SKU: {sku_id}, 价格: ¥{price:.2f}, {check_status})")
+                        status = self.fetch_item_status(item_id)
+                        
+                        if status is not None:
+                            if status != 1:  # 状态发生变化
+                                if self.update_item_status(item_id, status):
+                                    status_changed += 1
+                                    print(f"商品 {item_id} 状态已更新: {'在售' if status == 1 else '已下架'}")
+                            else:  # 状态未变化，仍为在售状态
+                                self.update_check_time(item_id)
+                            updated_count += 1
+                            error_count = 0  # 重置错误计数
+                            current_retry_sleep = self.error_sleep  # 重置重试时间
+                        else:
+                            error_count += 1
+                            print(f"获取商品 {item_id} 状态失败")
+                        
+                        # 如果连续错误过多，增加休眠时间
+                        if error_count >= 3:
+                            print(f"连续出错 {error_count} 次，休眠 {current_retry_sleep} 秒...")
+                            time.sleep(current_retry_sleep)
+                            # 计算下一次重试时间
+                            current_retry_sleep = min(
+                                current_retry_sleep * self.retry_multiplier,
+                                self.max_retry_sleep
+                            )
+                            print(f"下次重试休眠时间将增加到: {current_retry_sleep} 秒")
+                            error_count = 0
+                        
+                    except Exception as e:
+                        print(f"处理商品 {item_id} 时出错: {e}")
                         error_count += 1
-                        print(f"获取商品 {item_id} 状态失败")
-                    
-                    # 如果连续错误过多，增加休眠时间
-                    if error_count >= 3:
-                        print(f"连续出错 {error_count} 次，休眠 {current_retry_sleep} 秒...")
                         time.sleep(current_retry_sleep)
                         # 计算下一次重试时间
                         current_retry_sleep = min(
                             current_retry_sleep * self.retry_multiplier,
                             self.max_retry_sleep
                         )
-                        print(f"下次重试休眠时间将增加到: {current_retry_sleep} 秒")
-                        error_count = 0
-                    
-                except Exception as e:
-                    print(f"处理商品 {item_id} 时出错: {e}")
-                    error_count += 1
-                    time.sleep(current_retry_sleep)
-                    # 计算下一次重试时间
-                    current_retry_sleep = min(
-                        current_retry_sleep * self.retry_multiplier,
-                        self.max_retry_sleep
-                    )
-                    continue
-            
+                        continue
+                
+                # 每批次处理完后休息
+                if i + self.batch_size < total_items:
+                    print(f"批次处理完成，休息 {self.batch_sleep} 秒...")
+                    time.sleep(self.batch_sleep)
+
             end_time = datetime.now()
             duration = end_time - start_time
             
@@ -295,17 +305,8 @@ class BiliMallStatusSpider:
             print(f"处理失败数量: {total_items - updated_count}")
             print(f"耗时: {duration}")
             
-            # 根据错误数量动态调整休眠时间
-            if error_count > 0:
-                adjusted_sleep = min(
-                    self.round_sleep * self.retry_multiplier,
-                    self.max_retry_sleep
-                )
-                print(f"由于存在错误，增加休眠时间到 {adjusted_sleep} 秒({adjusted_sleep/60:.1f}分钟)")
-                time.sleep(adjusted_sleep)
-            else:
-                print(f"等待 {self.round_sleep} 秒({self.round_sleep/60:.1f}分钟)后开始下一轮...")
-                time.sleep(self.round_sleep)
+            print(f"\n等待{self.round_sleep}秒（{self.round_sleep/60:.1f}分钟）后开始下一轮...")
+            time.sleep(self.round_sleep)
             
             # 在每轮结束时检查可疑用户
             print("\n=== 检查可疑用户 ===")

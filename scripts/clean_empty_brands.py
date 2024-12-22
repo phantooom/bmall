@@ -3,7 +3,7 @@ import sqlite3
 def clean_empty_brands():
     """删除没有关联商品的品牌"""
     try:
-        conn = sqlite3.connect('bilibili_mall.db')
+        conn = sqlite3.connect('./db/bilibili_mall.db')
         cursor = conn.cursor()
         
         print("开始检查空品牌...")

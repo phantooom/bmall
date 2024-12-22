@@ -15,6 +15,9 @@ class BiliMallSpider:
         self.error_sleep = 30  # 错误重试休眠时间(秒)
         self.fatal_sleep = 60  # 严重错误休眠时间(秒)
         self.round_sleep = 300  # 每轮结束后的休眠时间(秒)，默认5分钟
+        self.page_sleep = 3  # 每页处理后的休眠时间(秒)
+        self.max_retry_sleep = 7200  # 最大重试休眠时间(秒)，默认2小时
+        self.retry_multiplier = 2  # 重试时间翻倍系数
         self.url = 'https://mall.bilibili.com/mall-magic-c/internet/c2c/v2/list'
         self.category = "2312"  # 商品分类ID
         self.headers = {
@@ -37,7 +40,7 @@ class BiliMallSpider:
 
     def init_db(self):
         """初始化数据库"""
-        self.conn = sqlite3.connect('bilibili_mall.db')
+        self.conn = sqlite3.connect('./db/bilibili_mall.db')
         self.cursor = self.conn.cursor()
         
         # 创建品牌表
@@ -388,7 +391,7 @@ class BiliMallSpider:
             raise
 
     def check_blacklist_users(self):
-        """检查一天内频繁上架的用户"""
+        """检查一天内频���上架的用户"""
         try:
             print("\n=== 检查黑名单用户 ===")
             
@@ -547,9 +550,6 @@ class BiliMallSpider:
                     print(f"跳过非类型1商品: {skipped_type_items}")
                     print(f"连续重复页数: {self.duplicate_count}/{self.max_duplicate_pages}")
                     
-                    print(f"\n等待{self.round_sleep}秒（{self.round_sleep/60:.1f}分钟）后开始下一轮爬取...")
-                    time.sleep(self.round_sleep)
-                    
                 except Exception as e:
                     print(f"爬取过程出错: {e}")
                     import traceback
@@ -573,6 +573,10 @@ class BiliMallSpider:
             print(f"跳过多SKU商品: {skipped_items}")
             print(f"跳过非类型1商品: {skipped_type_items}")
             print(f"连续重复页数: {self.duplicate_count}/{self.max_duplicate_pages}")
+            
+            # 清理超额记录
+            self.cleanup_excess_listings()
+            
             print(f"等待{self.round_sleep}秒（{self.round_sleep/60:.1f}分钟）后开始下一轮爬取...")
             time.sleep(self.round_sleep)
 
@@ -582,6 +586,79 @@ class BiliMallSpider:
             self.cursor.close()
         if hasattr(self, 'conn') and self.conn:
             self.conn.close()
+
+    def cleanup_excess_listings(self):
+        """清理每个用户每个SKU超过3条的在售记录"""
+        try:
+            print("\n=== 开始清理超额记录 ===")
+            
+            # 查找每个用户每个SKU的在售记录数量
+            self.cursor.execute("""
+                WITH user_sku_counts AS (
+                    SELECT 
+                        uid,
+                        uname,
+                        sku_id,
+                        COUNT(*) as listing_count
+                    FROM c2c_items
+                    WHERE publish_status = 1
+                    GROUP BY uid, uname, sku_id
+                    HAVING listing_count > 3
+                )
+                SELECT 
+                    usc.*,
+                    s.name as sku_name
+                FROM user_sku_counts usc
+                JOIN skus s ON usc.sku_id = s.sku_id
+                ORDER BY listing_count DESC
+            """)
+            
+            excess_records = self.cursor.fetchall()
+            
+            if not excess_records:
+                print("没有需要清理的超额记录")
+                return
+            
+            total_deleted = 0
+            print(f"发现 {len(excess_records)} 个用户/SKU组合需要清理")
+            
+            for record in excess_records:
+                # 获取该用户该SKU的所有在售记录
+                self.cursor.execute("""
+                    SELECT id
+                    FROM c2c_items
+                    WHERE uid = ? AND sku_id = ? AND publish_status = 1
+                    ORDER BY created_at DESC
+                    LIMIT -1 OFFSET 3
+                """, (record[0], record[2]))  # uid, sku_id
+                
+                to_delete = self.cursor.fetchall()
+                if to_delete:
+                    # 删除多余的记录
+                    self.cursor.execute("""
+                        DELETE FROM c2c_items
+                        WHERE id IN (
+                            SELECT id
+                            FROM c2c_items
+                            WHERE uid = ? AND sku_id = ? AND publish_status = 1
+                            ORDER BY created_at DESC
+                            LIMIT -1 OFFSET 3
+                        )
+                    """, (record[0], record[2]))
+                    
+                    deleted_count = len(to_delete)
+                    total_deleted += deleted_count
+                    print(f"用户 {record[1]} 的商品 {record[4]} "
+                          f"(SKU:{record[2]}) 删除了 {deleted_count} 条旧记录")
+            
+            self.conn.commit()
+            print(f"=== 清理完成，共删除 {total_deleted} 条记录 ===\n")
+            
+        except Exception as e:
+            print(f"清理超额记录时出错: {e}")
+            import traceback
+            print(traceback.format_exc())
+            self.conn.rollback()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='B站商城爬虫')
