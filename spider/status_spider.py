@@ -116,7 +116,7 @@ class BiliMallStatusSpider:
             return False
 
     def get_active_items(self):
-        """获取需要检查的在售商品ID，按SKU分组并优先检查每个SKU中最低价的商品"""
+        """获取需要检查的在售商品ID，优先检查未检查过的商品，然后是最早检查的商品"""
         self.cursor.execute('''
             WITH ranked_items AS (
                 -- 对每个SKU的商品按价格排序
@@ -125,7 +125,11 @@ class BiliMallStatusSpider:
                     i.sku_id,
                     i.price,
                     i.last_check_time,
-                    ROW_NUMBER() OVER (PARTITION BY i.sku_id ORDER BY i.price ASC) as price_rank
+                    ROW_NUMBER() OVER (PARTITION BY i.sku_id ORDER BY i.price ASC) as price_rank,
+                    CASE 
+                        WHEN i.last_check_time IS NULL THEN 1  -- 未检查过的优先级最高
+                        ELSE 2  -- 已检查过的优先级较低
+                    END as check_priority
                 FROM c2c_items i
                 WHERE i.publish_status = 1
             )
@@ -136,9 +140,11 @@ class BiliMallStatusSpider:
                 last_check_time
             FROM ranked_items
             ORDER BY 
-                price_rank ASC,  -- 优先检查每个SKU中最低价的
-                last_check_time IS NULL DESC,  -- 未检查过的优先
-                last_check_time ASC  -- 最后检查时间最早的优先
+                check_priority ASC,  -- 优先检查未检查过的
+                CASE 
+                    WHEN check_priority = 1 THEN price_rank  -- 未检查过的按价格排序
+                    ELSE last_check_time  -- 已检查过的按最后检查时间排序
+                END ASC
         ''')
         return [(row[0], row[1], row[2]) for row in self.cursor.fetchall()]
 
