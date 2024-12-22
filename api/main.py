@@ -102,39 +102,41 @@ async def get_brands():
         conn.close()
 
 @app.get("/api/skus", response_model=SkuListResponse)
-async def get_sku_list(
-    brand_id: Optional[int] = None,
-    keyword: Optional[str] = None,
-    sort_by: Optional[str] = "total_items",
-    page: int = 1,
-    page_size: int = 100
+async def get_skus(
+    page: int = 1, 
+    page_size: int = 20, 
+    brand_id: Optional[int] = None, 
+    keyword: Optional[str] = None, 
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc"
 ):
-    """获取SKU列表及其价格范围"""
+    """获取SKU列表"""
     try:
         conn = get_db()
         cursor = conn.cursor()
         
-        # 先获取总数
-        count_query = """
-            SELECT COUNT(*) as total
-            FROM (
-                SELECT DISTINCT s.sku_id
-                FROM skus s
-                JOIN c2c_items i ON i.sku_id = s.sku_id
-                WHERE 1=1
-                {brand_filter}
-                AND (? IS NULL OR s.name LIKE ?)
-            )
-        """
+        # 构建查询条件
+        params = []
+        brand_filter = ""
+        if brand_id is not None:
+            brand_filter = "AND i.brand_id = ?"
+            params.append(brand_id)
         
-        # 修改排序逻辑
-        order_by = {
-            "total_items": "total_items DESC",
-            "min_price": "min_price ASC"
-        }.get(sort_by, "total_items DESC")
+        # 添加搜索参数
+        search_term = f"%{keyword}%" if keyword else None
+        params.extend([search_term, search_term])  # 两次，因为有两个查询都用到了
+        
+        # 构建排序条件
+        order_clause = "s.sku_id DESC"
+        if sort_by:
+            order_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+            if sort_by == "min_price":
+                order_clause = f"min_price {order_direction}"
+            elif sort_by == "total_items":
+                order_clause = f"total_items {order_direction}"
         
         # 主查询
-        base_query = """
+        query = f"""
             WITH filtered_items AS (
                 SELECT 
                     i.sku_id,
@@ -152,7 +154,8 @@ async def get_sku_list(
                     s.market_price,
                     MIN(fi.price) as min_price,
                     MAX(fi.price) as max_price,
-                    COUNT(fi.id) as total_items
+                    COUNT(fi.id) as total_items,
+                    MAX(fi.id) as latest_id
                 FROM skus s
                 JOIN filtered_items fi ON fi.sku_id = s.sku_id
                 WHERE 1=1
@@ -169,34 +172,19 @@ async def get_sku_list(
                 total_items
             FROM sku_stats
             WHERE total_items > 0
-            ORDER BY {order_by}
+            ORDER BY {
+                'latest_id DESC' if not sort_by
+                else f"total_items {order_direction}" if sort_by == 'total_items'
+                else f"min_price {order_direction}" if sort_by == 'min_price'
+                else 'latest_id DESC'
+            }
             LIMIT ? OFFSET ?
         """
         
-        # 准备查询参数
-        params = []
-        brand_filter = ""
-        if brand_id is not None:
-            brand_filter = "AND i.brand_id = ?"
-            params.append(brand_id)
+        # 添加分页参数
+        params.extend([page_size, (page - 1) * page_size])
         
-        # 添加搜索参数
-        search_term = f"%{keyword}%" if keyword else None
-        count_params = params.copy()  # 为计数查询创建参数副本
-        count_params.extend([keyword, search_term])
-        
-        # 获取总数
-        count_query = count_query.format(brand_filter=brand_filter)
-        cursor.execute(count_query, count_params)
-        total = cursor.fetchone()['total']
-        
-        # 添加主查询的参数
-        params.extend([keyword, search_term])  # 添加搜索参数
-        params.extend([page_size, (page - 1) * page_size])  # 添加分页参数
-        query = base_query.format(
-            brand_filter=brand_filter,
-            order_by=order_by
-        )
+        # 执行查询
         cursor.execute(query, params)
         
         results = []
@@ -220,10 +208,10 @@ async def get_sku_list(
         
         return {
             "items": results,
-            "total": total,
+            "total": cursor.rowcount,
             "page": page,
             "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size
+            "total_pages": (cursor.rowcount + page_size - 1) // page_size
         }
     finally:
         conn.close()

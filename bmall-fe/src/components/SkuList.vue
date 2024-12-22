@@ -18,10 +18,31 @@
         </el-button>
       </div>
       <div class="sort-controls">
-        <el-radio-group v-model="sortBy" @change="handleSortChange">
-          <el-radio-button label="total_items">按数量</el-radio-button>
-          <el-radio-button label="min_price">按价格</el-radio-button>
+        <el-radio-group v-model="sortBy" @change="handleSortChange" size="small">
+          <el-radio-button value="">默认排序</el-radio-button>
+          <el-radio-button value="total_items">
+            数量{{ sortOrder === 'desc' ? '多到少' : '少到多' }}
+          </el-radio-button>
+          <el-radio-button value="min_price">
+            价格{{ sortOrder === 'desc' ? '高到低' : '低到高' }}
+          </el-radio-button>
         </el-radio-group>
+        <el-button-group>
+          <el-button 
+            :type="sortOrder === 'desc' ? 'primary' : ''" 
+            size="small"
+            @click="toggleSortOrder"
+          >
+            降序
+          </el-button>
+          <el-button 
+            :type="sortOrder === 'asc' ? 'primary' : ''" 
+            size="small"
+            @click="toggleSortOrder"
+          >
+            升序
+          </el-button>
+        </el-button-group>
       </div>
       <div class="right-controls">
         <el-input
@@ -120,11 +141,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import axios from 'axios'
+import { apiClient } from '../api/client'
 import { Picture, PictureFilled, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { SkuInfo, ItemDetail } from '../types'
 import ItemList from './ItemList.vue'
+import { API_BASE_URL } from '../config'
 
 interface Brand {
   id: number
@@ -154,14 +176,15 @@ const dialogVisible = ref(false)
 const currentItems = ref<ItemDetail[]>([])
 const currentPage = ref(1)
 const pageSize = ref(100)
-const sortBy = ref('total_items')
+const sortBy = ref('')
+const sortOrder = ref('desc')
 const selectedSkus = ref<number[]>([])
 const isAllSelected = ref(false)
 const isIndeterminate = ref(false)
 
 const fetchBrands = async () => {
   try {
-    const response = await axios.get<Brand[]>('http://localhost:8000/api/brands')
+    const response = await apiClient.get('/brands')
     brands.value = response.data
   } catch (error) {
     console.error('获取品牌列表失败:', error)
@@ -173,23 +196,25 @@ const fetchSkus = async (
   page: number = 1, 
   pageSize: number = 100,
   keyword?: string,
-  sort?: string
+  sort_by?: string,
+  sort_order: string = 'desc'
 ) => {
   try {
-    const url = new URL('http://localhost:8000/api/skus')
+    const params = new URLSearchParams()
     if (brandId) {
-      url.searchParams.set('brand_id', brandId.toString())
+      params.set('brand_id', brandId.toString())
     }
-    url.searchParams.set('page', page.toString())
-    url.searchParams.set('page_size', pageSize.toString())
+    params.set('page', page.toString())
+    params.set('page_size', pageSize.toString())
     if (keyword) {
-      url.searchParams.set('keyword', keyword)
+      params.set('keyword', keyword)
     }
-    if (sort) {
-      url.searchParams.set('sort_by', sort)
+    if (sort_by) {
+      params.set('sort_by', sort_by)
+      params.set('sort_order', sort_order)
     }
     
-    const response = await axios.get<SkuListResponse>(url.toString())
+    const response = await apiClient.get('/skus', { params })
     skuList.value = {
       ...response.data,
       items: response.data.items.map(sku => ({
@@ -204,22 +229,22 @@ const fetchSkus = async (
 
 const handleBrandChange = (brandId: number | null) => {
   currentPage.value = 1
-  fetchSkus(brandId || undefined, currentPage.value, pageSize.value, searchKeyword.value, sortBy.value)
+  fetchSkus(brandId || undefined, currentPage.value, pageSize.value, searchKeyword.value, sortBy.value, sortOrder.value)
 }
 
 const handleSearch = (value: string) => {
   currentPage.value = 1
-  fetchSkus(selectedBrand.value || undefined, currentPage.value, pageSize.value, value, sortBy.value)
+  fetchSkus(selectedBrand.value || undefined, currentPage.value, pageSize.value, value, sortBy.value, sortOrder.value)
 }
 
 const handleSizeChange = (size: number) => {
   pageSize.value = size
-  fetchSkus(selectedBrand.value || undefined, currentPage.value, size, searchKeyword.value, sortBy.value)
+  fetchSkus(selectedBrand.value || undefined, currentPage.value, size, searchKeyword.value, sortBy.value, sortOrder.value)
 }
 
 const handleCurrentChange = (page: number) => {
   currentPage.value = page
-  fetchSkus(selectedBrand.value || undefined, page, pageSize.value, searchKeyword.value, sortBy.value)
+  fetchSkus(selectedBrand.value || undefined, page, pageSize.value, searchKeyword.value, sortBy.value, sortOrder.value)
 }
 
 const handleSortChange = (value: string) => {
@@ -228,17 +253,18 @@ const handleSortChange = (value: string) => {
     currentPage.value,
     pageSize.value,
     searchKeyword.value,
-    value
+    value,
+    sortOrder.value
   )
 }
 
 const showItems = async (skuId: number) => {
   try {
-    const response = await axios.get<ItemDetail[]>(`http://localhost:8000/api/sku/${skuId}/items`)
+    const response = await apiClient.get(`/sku/${skuId}/items`)
     currentItems.value = response.data
     dialogVisible.value = true
   } catch (error) {
-    console.error('获取商品列表失败:', error)
+    ElMessage.error('获取商品详情失败')
   }
 }
 
@@ -292,7 +318,7 @@ const handleBatchDelete = async () => {
       }
     )
 
-    const response = await axios.delete('http://localhost:8000/api/products/batch', {
+    const response = await apiClient.delete('/products/batch', {
       data: {
         productIds: selectedSkus.value
       }
@@ -306,7 +332,8 @@ const handleBatchDelete = async () => {
         currentPage.value,
         pageSize.value,
         searchKeyword.value,
-        sortBy.value
+        sortBy.value,
+        sortOrder.value
       )
       // 清空选择
       selectedSkus.value = []
@@ -332,7 +359,7 @@ const handleDelete = async (skuId: number) => {
       }
     )
 
-    const response = await axios.delete('http://localhost:8000/api/products/batch', {
+    const response = await apiClient.delete('/products/batch', {
       data: {
         productIds: [skuId]
       }
@@ -346,7 +373,8 @@ const handleDelete = async (skuId: number) => {
         currentPage.value,
         pageSize.value,
         searchKeyword.value,
-        sortBy.value
+        sortBy.value,
+        sortOrder.value
       )
     } else {
       throw new Error(response.data.message)
@@ -358,8 +386,15 @@ const handleDelete = async (skuId: number) => {
   }
 }
 
+const toggleSortOrder = () => {
+  sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
+  if (sortBy.value) {
+    handleSortChange(sortBy.value)
+  }
+}
+
 onMounted(() => {
-  fetchSkus(undefined, currentPage.value, pageSize.value, searchKeyword.value, sortBy.value)
+  fetchSkus(undefined, currentPage.value, pageSize.value, searchKeyword.value, sortBy.value, sortOrder.value)
   fetchBrands()
 })
 </script>
@@ -468,5 +503,11 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+}
+
+.sort-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 </style> 

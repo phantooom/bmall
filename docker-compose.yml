@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  frontend:
+    image: phantooom/bilibili-mall-frontend:latest
+    container_name: bilibili-mall-frontend
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_PROXY_TARGET=https://bmall-api.home.zou.cool/api
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    image: phantooom/bilibili-mall-api:latest
+    container_name: bilibili-mall-api
+    expose:
+      - "8000"
+    volumes:
+      - /data/bilibili-mall/db:/app/db
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    command: >
+      sh -c "python init_db.py &&
+             uvicorn api.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/statistics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  mall-spider:
+    image: phantooom/bilibili-mall-api:latest
+    container_name: bilibili-mall-spider
+    volumes:
+      - /data/bilibili-mall/db:/app/db
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    command: python -m spider.mall-spider --cookie "${BILI_COOKIE}" --pages 100
+    depends_on:
+      api:
+        condition: service_healthy
+
+  status-spider:
+    image: phantooom/bilibili-mall-api:latest
+    container_name: bilibili-mall-status
+    volumes:
+      - /data/bilibili-mall/db:/app/db
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    command: python -m spider.status_spider --cookie "${BILI_COOKIE}"
+    depends_on:
+      api:
+        condition: service_healthy

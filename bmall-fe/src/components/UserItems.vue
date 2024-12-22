@@ -69,7 +69,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import axios from 'axios'
+import { apiClient } from '../api/client'
 import ItemList from './ItemList.vue'
 
 interface UserItem {
@@ -98,7 +98,12 @@ const currentItems = ref([])
 const fetchItems = async () => {
   loading.value = true
   try {
-    const response = await axios.get<UserItem[]>(`http://localhost:8000/api/user/${props.seller_uid}/items`)
+    const response = await apiClient.get('/user/items', {
+      params: {
+        uid: props.seller_uid,
+        uname: props.seller_name
+      }
+    })
     items.value = response.data
   } catch (error) {
     ElMessage.error('获取用户商品列表失败')
@@ -109,7 +114,7 @@ const fetchItems = async () => {
 
 const showItems = async (skuId: number) => {
   try {
-    const response = await axios.get(`http://localhost:8000/api/sku/${skuId}/items`)
+    const response = await apiClient.get(`/sku/${skuId}/items`)
     currentItems.value = response.data
     dialogVisible.value = true
   } catch (error) {

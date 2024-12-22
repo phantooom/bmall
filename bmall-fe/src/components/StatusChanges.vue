@@ -102,6 +102,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import ItemList from './ItemList.vue'
+import { apiClient } from '../api/client'
 
 interface StatusChange {
   id: number
@@ -144,7 +145,7 @@ const filteredItems = computed(() => statusChanges.value.items)
 const fetchStatusChanges = async () => {
   loading.value = true
   try {
-    const response = await axios.get<StatusChangeResponse>('http://localhost:8000/api/status-changes', {
+    const response = await apiClient.get<StatusChangeResponse>('/status-changes', {
       params: {
         page: currentPage.value,
         page_size: pageSize.value,
@@ -172,7 +173,7 @@ const handleCurrentChange = (page: number) => {
 
 const showItems = async (skuId: number) => {
   try {
-    const response = await axios.get(`http://localhost:8000/api/sku/${skuId}/items`)
+    const response = await apiClient.get(`/sku/${skuId}/items`)
     currentItems.value = response.data
     dialogVisible.value = true
   } catch (error) {

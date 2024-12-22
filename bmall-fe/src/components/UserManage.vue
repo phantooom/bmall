@@ -308,6 +308,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
 import ItemList from './ItemList.vue'
+import { apiClient } from '../api/client'
 
 interface SuspiciousUser {
   uid: string
@@ -318,6 +319,7 @@ interface SuspiciousUser {
   first_listing: string
   last_listing: string
   total_skus: number
+  reason?: string
 }
 
 interface BlacklistUser {
@@ -362,6 +364,12 @@ interface UserItem {
   last_listing: string
 }
 
+interface BlacklistRequest {
+  uid: string
+  uname: string
+  reason: string
+}
+
 const suspiciousUsers = ref<SuspiciousUser[]>([])
 const blacklist = ref<BlacklistResponse>({
   items: [],
@@ -386,11 +394,11 @@ const fetchData = async () => {
   loading.value = true
   try {
     // 获取可疑用户
-    const suspiciousResponse = await axios.get<SuspiciousUser[]>('http://localhost:8000/api/suspicious-users')
+    const suspiciousResponse = await apiClient.get('/suspicious-users')
     suspiciousUsers.value = suspiciousResponse.data
 
     // 获取黑名单用户
-    const blacklistResponse = await axios.get<BlacklistResponse>('http://localhost:8000/api/blacklist', {
+    const blacklistResponse = await apiClient.get<BlacklistResponse>('/blacklist', {
       params: {
         page: currentPage.value,
         page_size: pageSize.value
@@ -399,7 +407,7 @@ const fetchData = async () => {
     blacklist.value = blacklistResponse.data
 
     // 获取用户统计数据
-    const statsResponse = await axios.get<Record<string, UserStat[]>>('http://localhost:8000/api/user-stats')
+    const statsResponse = await apiClient.get<Record<string, UserStat[]>>('/user-stats')
     userStats.value = statsResponse.data
   } catch (error) {
     ElMessage.error('获取数据失败')
@@ -420,14 +428,16 @@ const addToBlacklist = async (user: SuspiciousUser) => {
       }
     )
 
-    const response = await axios.post('http://localhost:8000/api/blacklist', {
+    const blacklistRequest: BlacklistRequest = {
       uid: user.uid,
       uname: user.uname,
-      reason: `1小时内对商品 ${user.sku_name} 上架 ${user.listing_count} 次`
-    })
+      reason: `${activePeriod.value}内上架 ${user.listing_count} 个商品`
+    }
+
+    const response = await apiClient.post('/blacklist', blacklistRequest)
 
     if (response.data.success) {
-      ElMessage.success('已添加到黑名单')
+      ElMessage.success('已加入黑名单')
       fetchData()
     } else {
       ElMessage.warning(response.data.message)
@@ -451,7 +461,7 @@ const removeFromBlacklist = async (user: BlacklistUser) => {
       }
     )
 
-    const response = await axios.delete(`http://localhost:8000/api/blacklist/${user.uid}`)
+    const response = await apiClient.delete(`/blacklist/${user.uid}`)
     if (response.data.success) {
       ElMessage.success('已从黑名单中移除')
       fetchData()
@@ -479,7 +489,7 @@ const showUserItems = async (user: SuspiciousUser | BlacklistUser) => {
   itemsLoading.value = true
   
   try {
-    const response = await axios.get<UserItem[]>('http://localhost:8000/api/user/items', {
+    const response = await apiClient.get<UserItem[]>('/user/items', {
       params: {
         uid: user.uid,
         uname: user.uname
@@ -518,7 +528,7 @@ const formatDate = (dateStr: string, short = false) => {
 
 const showItems = async (skuId: number) => {
   try {
-    const response = await axios.get(`http://localhost:8000/api/sku/${skuId}/items`)
+    const response = await apiClient.get(`/sku/${skuId}/items`)
     skuItems.value = response.data
     skuDialogVisible.value = true
   } catch (error) {

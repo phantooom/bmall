@@ -57,7 +57,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import axios from 'axios'
+import { apiClient } from '../api/client'
 
 interface Brand {
   id: number
@@ -85,7 +85,7 @@ const rules: FormRules = {
 const fetchBrands = async () => {
   loading.value = true
   try {
-    const response = await axios.get<Brand[]>('http://localhost:8000/api/brands')
+    const response = await apiClient.get('/brands')
     brands.value = response.data
   } catch (error) {
     ElMessage.error('获取品牌列表失败')
@@ -107,7 +107,7 @@ const handleSubmit = async () => {
   await formRef.value.validate(async (valid) => {
     if (valid) {
       try {
-        const response = await axios.post('http://localhost:8000/api/brands', form.value)
+        const response = await apiClient.post('/brands', form.value)
         if (response.data.success) {
           ElMessage.success('添加成功')
           dialogVisible.value = false
@@ -138,7 +138,7 @@ const handleDelete = async (brand: Brand) => {
       }
     )
 
-    const response = await axios.delete(`http://localhost:8000/api/brands/${brand.id}`)
+    const response = await apiClient.delete(`/brands/${brand.id}`)
     if (response.data.success) {
       ElMessage.success('删除成功')
       fetchBrands()

@@ -129,7 +129,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import axios from 'axios'
+import { apiClient } from '../api/client'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -261,11 +261,10 @@ const chartOption = computed(() => {
 const fetchData = async () => {
   loading.value = true
   try {
-    const [statsResponse, trendResponse] = await Promise.all([
-      axios.get<Record<string, PeriodStats>>('http://localhost:8000/api/statistics'),
-      axios.get<TrendData[]>('http://localhost:8000/api/statistics/trend')
-    ])
-    statistics.value = statsResponse.data
+    const response = await apiClient.get('/statistics')
+    statistics.value = response.data
+    
+    const trendResponse = await apiClient.get('/statistics/trend')
     trendData.value = trendResponse.data
   } catch (error) {
     ElMessage.error('获取统计数据失败')
