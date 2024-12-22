@@ -24,6 +24,27 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+# 在初始化数据库连接后添加黑名单表创建代码
+def init_db():
+    conn = sqlite3.connect(DATABASE_URL)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # 创建黑名单表
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS blacklist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid TEXT NOT NULL,
+        uname TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(uid)
+    )
+    ''')
+    
+    conn.commit()
+    return conn
+
 # 模型定义
 class SkuInfo(BaseModel):
     sku_id: int
@@ -43,6 +64,8 @@ class ItemDetail(BaseModel):
     market_price: float
     url: str
     publish_status: int
+    created_at: datetime
+    is_blacklisted: bool
 
 class SkuListResponse(BaseModel):
     items: List[SkuInfo]
@@ -221,7 +244,9 @@ async def get_sku_items(sku_id: int):
                 i.uspace_jump_url as seller_url,
                 i.price,
                 s.market_price,
-                i.publish_status
+                i.publish_status,
+                i.created_at,
+                i.is_blacklisted
             FROM c2c_items i
             JOIN skus s ON i.sku_id = s.sku_id
             WHERE i.sku_id = ?
@@ -236,15 +261,14 @@ async def get_sku_items(sku_id: int):
             avatar_url = row['seller_avatar']
             if not avatar_url:
                 avatar_url = 'https://i0.hdslb.com/bfs/face/member/noface.jpg'
-            
-            # 处理头像URL
-            if avatar_url.startswith('//'):
+            elif avatar_url.startswith('//'):
                 avatar_url = f"https:{avatar_url}"
             
-            # 将头像域名从 i[0-9].hdslb.com 替换为 i[0-9].hdslb.com/bfs
-            avatar_url = avatar_url.replace('i0.hdslb.com', 'i0.hdslb.com/bfs')
-            avatar_url = avatar_url.replace('i1.hdslb.com', 'i1.hdslb.com/bfs')
-            avatar_url = avatar_url.replace('i2.hdslb.com', 'i2.hdslb.com/bfs')
+            # 只有当URL不包含 /bfs/ 时才添加
+            if '/bfs/' not in avatar_url:
+                avatar_url = avatar_url.replace('i0.hdslb.com', 'i0.hdslb.com/bfs')
+                avatar_url = avatar_url.replace('i1.hdslb.com', 'i1.hdslb.com/bfs')
+                avatar_url = avatar_url.replace('i2.hdslb.com', 'i2.hdslb.com/bfs')
             
             # 处理个人空间URL
             seller_url = row['seller_url']
@@ -260,7 +284,9 @@ async def get_sku_items(sku_id: int):
                 "price": row['price'],
                 "market_price": row['market_price'],
                 "url": f"{base_url}{row['c2c_items_id']}",
-                "publish_status": row['publish_status']
+                "publish_status": row['publish_status'],
+                "created_at": row['created_at'],
+                "is_blacklisted": row['is_blacklisted']
             })
         
         return results
@@ -518,6 +544,286 @@ async def get_status_changes(page: int = 1, page_size: int = 20):
             "page_size": page_size,
             "total_pages": (total + page_size - 1) // page_size
         }
+    finally:
+        conn.close()
+
+@app.get("/api/blacklist")
+async def get_blacklist(page: int = 1, page_size: int = 20):
+    """获取黑名单用户列表"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 获取总记录数
+        cursor.execute("SELECT COUNT(*) as total FROM blacklist")
+        total = cursor.fetchone()['total']
+        
+        # 计算分页
+        offset = (page - 1) * page_size
+        
+        # 获取分页数据
+        cursor.execute("""
+            SELECT 
+                b.*,
+                (
+                    SELECT COUNT(DISTINCT c.id)
+                    FROM c2c_items c
+                    WHERE c.uid = b.uid
+                ) as total_items
+            FROM blacklist b
+            ORDER BY b.created_at DESC
+            LIMIT ? OFFSET ?
+        """, (page_size, offset))
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row['id'],
+                "uid": row['uid'],
+                "uname": row['uname'],
+                "reason": row['reason'],
+                "created_at": row['created_at'],
+                "total_items": row['total_items']
+            })
+        
+        return {
+            "items": results,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size
+        }
+    finally:
+        conn.close()
+
+@app.get("/api/suspicious-users")
+async def get_suspicious_users():
+    """获取可疑用户列表（1小时内对同一商品上架超过20次的用户）"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            WITH user_stats AS (
+                SELECT 
+                    c.uid,
+                    c.uname,
+                    c.sku_id,
+                    COUNT(*) as listing_count,
+                    MIN(c.created_at) as first_listing,
+                    MAX(c.created_at) as last_listing
+                FROM c2c_items c
+                WHERE c.created_at >= datetime('now', '-1 hour')
+                GROUP BY c.uid, c.uname, c.sku_id
+                HAVING listing_count >= 20
+            )
+            SELECT 
+                us.*,
+                s.name as sku_name,
+                (
+                    SELECT COUNT(DISTINCT c2.sku_id)
+                    FROM c2c_items c2
+                    WHERE c2.uid = us.uid
+                ) as total_skus
+            FROM user_stats us
+            JOIN skus s ON us.sku_id = s.sku_id
+            ORDER BY us.listing_count DESC
+        """)
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "uid": row['uid'],
+                "uname": row['uname'],
+                "sku_id": row['sku_id'],
+                "sku_name": row['sku_name'],
+                "listing_count": row['listing_count'],
+                "first_listing": row['first_listing'],
+                "last_listing": row['last_listing'],
+                "total_skus": row['total_skus']
+            })
+        
+        return results
+    finally:
+        conn.close()
+
+@app.post("/api/blacklist")
+async def add_to_blacklist(user: dict):
+    """添加用户到黑名单"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN TRANSACTION")
+            
+            # 添加到黑名单
+            cursor.execute("""
+                INSERT INTO blacklist (uid, uname, reason)
+                VALUES (?, ?, ?)
+            """, (user['uid'], user['uname'], user['reason']))
+            
+            cursor.execute("COMMIT")
+            
+            return {
+                "success": True,
+                "message": "已添加到黑名单"
+            }
+            
+        except sqlite3.IntegrityError:
+            cursor.execute("ROLLBACK")
+            return {
+                "success": False,
+                "message": "该用户已在黑名单中"
+            }
+            
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
+    finally:
+        conn.close()
+
+@app.delete("/api/blacklist/{uid}")
+async def remove_from_blacklist(uid: str):
+    """从黑名单中移除用户"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("DELETE FROM blacklist WHERE uid = ?", (uid,))
+        conn.commit()
+        
+        return {
+            "success": True,
+            "message": "已从黑名单中移除"
+        }
+    finally:
+        conn.close()
+
+@app.get("/api/user-stats")
+async def get_user_stats():
+    """获取用户行为统计数据"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 定义时间段
+        periods = [
+            ('1小时', 'datetime("now", "-1 hour")'),
+            ('3小时', 'datetime("now", "-3 hours")'),
+            ('12小时', 'datetime("now", "-12 hours")'),
+            ('24小时', 'datetime("now", "-24 hours")')
+        ]
+        
+        results = {}
+        
+        for period_name, period_sql in periods:
+            # 获取每个时间段内用户的上架数据
+            cursor.execute(f"""
+                WITH user_stats AS (
+                    SELECT 
+                        c.uid,
+                        c.uname,
+                        COUNT(DISTINCT c.id) as listing_count,
+                        COUNT(DISTINCT c.sku_id) as sku_count,
+                        MIN(c.price) as min_price,
+                        MAX(c.price) as max_price,
+                        MIN(c.created_at) as first_listing,
+                        MAX(c.created_at) as last_listing,
+                        (
+                            SELECT b.reason 
+                            FROM blacklist b 
+                            WHERE b.uid = c.uid
+                            LIMIT 1
+                        ) as blacklist_reason
+                    FROM c2c_items c
+                    WHERE c.created_at >= {period_sql}
+                    GROUP BY c.uid, c.uname
+                )
+                SELECT 
+                    us.*,
+                    CASE 
+                        WHEN blacklist_reason IS NOT NULL THEN 1
+                        ELSE 0
+                    END as is_blacklisted
+                FROM user_stats us
+                ORDER BY us.listing_count DESC
+                LIMIT 50
+            """)
+            
+            period_results = []
+            for row in cursor.fetchall():
+                period_results.append({
+                    "uid": row['uid'],
+                    "uname": row['uname'],
+                    "listing_count": row['listing_count'],
+                    "sku_count": row['sku_count'],
+                    "min_price": float(row['min_price']),
+                    "max_price": float(row['max_price']),
+                    "first_listing": row['first_listing'],
+                    "last_listing": row['last_listing'],
+                    "is_blacklisted": row['is_blacklisted'],
+                    "blacklist_reason": row['blacklist_reason']
+                })
+            
+            results[period_name] = period_results
+        
+        return results
+    finally:
+        conn.close()
+
+@app.get("/api/user/{uid}/items")
+async def get_user_items(uid: str):
+    """获取指定用户的所有商品"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT DISTINCT
+                s.sku_id,
+                s.name,
+                s.img,
+                s.market_price,
+                COUNT(DISTINCT c.id) as listing_count,
+                MIN(c.price) as min_price,
+                MAX(c.price) as max_price,
+                MIN(c.created_at) as first_listing,
+                MAX(c.created_at) as last_listing
+            FROM c2c_items c
+            JOIN skus s ON c.sku_id = s.sku_id
+            WHERE c.uid = ?
+            GROUP BY s.sku_id, s.name, s.img, s.market_price
+            ORDER BY last_listing DESC
+        """, (uid,))
+        
+        results = []
+        for row in cursor.fetchall():
+            img_url = row['img']
+            if img_url:
+                if img_url.startswith('//'):
+                    img_url = f"https:{img_url}"
+                if '/bfs/' not in img_url:
+                    img_url = img_url.replace('i0.hdslb.com', 'i0.hdslb.com/bfs')
+                    img_url = img_url.replace('i1.hdslb.com', 'i1.hdslb.com/bfs')
+                    img_url = img_url.replace('i2.hdslb.com', 'i2.hdslb.com/bfs')
+            
+            results.append({
+                "sku_id": row['sku_id'],
+                "name": row['name'],
+                "img": img_url,
+                "market_price": float(row['market_price']),
+                "listing_count": row['listing_count'],
+                "min_price": float(row['min_price']),
+                "max_price": float(row['max_price']),
+                "first_listing": row['first_listing'],
+                "last_listing": row['last_listing']
+            })
+        
+        return results
     finally:
         conn.close()
 

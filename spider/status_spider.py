@@ -27,6 +27,7 @@ class BiliMallStatusSpider:
         if cookie:
             self.headers['cookie'] = cookie
         self.init_db()
+        self.suspicious_threshold = 20  # 1小时内上架次数阈值
 
     def init_db(self):
         """初始化数据库连接"""
@@ -148,6 +149,64 @@ class BiliMallStatusSpider:
         ''')
         return [(row[0], row[1], row[2]) for row in self.cursor.fetchall()]
 
+    def check_suspicious_users(self):
+        """检查并自动将可疑用户加入黑名单"""
+        try:
+            cursor = self.cursor
+            
+            # 查找可疑用户
+            cursor.execute("""
+                WITH user_stats AS (
+                    SELECT 
+                        c.uid,
+                        c.uname,
+                        c.sku_id,
+                        COUNT(*) as listing_count,
+                        MIN(c.created_at) as first_listing,
+                        MAX(c.created_at) as last_listing
+                    FROM c2c_items c
+                    WHERE c.created_at >= datetime('now', '-1 hour')
+                    GROUP BY c.uid, c.uname, c.sku_id
+                    HAVING listing_count >= ?
+                )
+                SELECT 
+                    us.*,
+                    s.name as sku_name
+                FROM user_stats us
+                JOIN skus s ON us.sku_id = s.sku_id
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM blacklist b 
+                    WHERE b.uid = us.uid
+                )
+            """, (self.suspicious_threshold,))
+            
+            suspicious_users = cursor.fetchall()
+            
+            for user in suspicious_users:
+                try:
+                    # 添加到黑名单
+                    cursor.execute("""
+                        INSERT INTO blacklist (uid, uname, reason)
+                        VALUES (?, ?, ?)
+                    """, (
+                        user['uid'],
+                        user['uname'],
+                        f"自动加入黑名单：1小时内对商品 {user['sku_name']} 上架 {user['listing_count']} 次"
+                    ))
+                    
+                    print(f"用户 {user['uname']}(UID:{user['uid']}) 已自动加入黑名单")
+                    print(f"原因：1小时内对商品 {user['sku_name']} 上架 {user['listing_count']} 次")
+                    
+                except sqlite3.IntegrityError:
+                    # 用户已在黑名单中，忽略
+                    pass
+                
+            self.conn.commit()
+            
+        except Exception as e:
+            print(f"检查可疑用户时出错: {e}")
+            self.conn.rollback()
+
     def run(self):
         """运行状态更新爬虫"""
         while True:  # 持续运行
@@ -237,6 +296,10 @@ class BiliMallStatusSpider:
             else:
                 print(f"等待 {self.round_sleep} 秒({self.round_sleep/60:.1f}分钟)后开始下一轮...")
                 time.sleep(self.round_sleep)
+            
+            # 在每轮结束时检查可疑用户
+            print("\n=== 检查可疑用户 ===")
+            self.check_suspicious_users()
 
     def close(self):
         """关闭数据库连接"""

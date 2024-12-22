@@ -100,6 +100,28 @@ class BiliMallSpider:
         # 初始化品牌数据
         self.init_brands()
         
+        # 创建黑名单表（如果不存在）
+        self.cursor.execute('''
+        CREATE TABLE IF NOT EXISTS blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid TEXT NOT NULL,
+            uname TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(uid)
+        )
+        ''')
+        
+        # 添加 is_blacklisted 字段（如果不存在）
+        try:
+            self.cursor.execute('''
+                ALTER TABLE c2c_items 
+                ADD COLUMN is_blacklisted INTEGER DEFAULT 0
+            ''')
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 字段已存在，忽略错误
+        
         self.conn.commit()
 
     def init_brands(self):
@@ -198,9 +220,68 @@ class BiliMallSpider:
             print(response.text)
             return None
 
+    def check_suspicious_user(self, uid: str, uname: str, sku_id: int):
+        """检查用户是否可疑（1小时内对同一商品上架超过20次）"""
+        try:
+            # 检查用户在过去1小时内对该商品的上架次数
+            self.cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM c2c_items
+                WHERE uid = ? 
+                AND sku_id = ?
+                AND created_at >= datetime('now', '-1 hour')
+            """, (uid, sku_id))
+            
+            count = self.cursor.fetchone()[0]
+            
+            if count >= 20:  # 如果1小时内上架超过20次
+                try:
+                    # 获取商品名称
+                    self.cursor.execute("SELECT name FROM skus WHERE sku_id = ?", (sku_id,))
+                    sku_name = self.cursor.fetchone()[0]
+                    
+                    # 添加到黑名单
+                    self.cursor.execute("""
+                        INSERT INTO blacklist (uid, uname, reason)
+                        VALUES (?, ?, ?)
+                    """, (
+                        uid,
+                        uname,
+                        f"自动加入黑名单：1小时内对商品 {sku_name} 上架 {count} 次"
+                    ))
+                    
+                    self.conn.commit()
+                    print(f"用户 {uname}(UID:{uid}) 已自动加入黑名单")
+                    print(f"原因：1小时内对商品 {sku_name} 上架 {count} 次")
+                    return True
+                    
+                except sqlite3.IntegrityError:
+                    # 用户已在黑名单中
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"检查可疑用户时出错: {e}")
+            return False
+
+    def check_blacklist(self, uid: str):
+        """检查用户是否在黑名单中"""
+        try:
+            self.cursor.execute("SELECT 1 FROM blacklist WHERE uid = ?", (uid,))
+            return self.cursor.fetchone() is not None
+        except Exception as e:
+            print(f"检查黑名单时出错: {e}")
+            return False
+
     def save_to_db(self, item):
         """保存数据到数据库"""
         try:
+            # 检查用户是否在黑名单中
+            is_blacklisted = self.check_blacklist(item['uid'])
+            if is_blacklisted:
+                print(f"商品 {item['c2cItemsId']} 的卖家 {item['uname']}(UID:{item['uid']}) 在黑名单中")
+            
             # 检查是否已存在
             existing_item = self.check_item_exists(item['c2cItemsId'])
             
@@ -265,8 +346,8 @@ class BiliMallSpider:
                         id, type, name, brand_id, sku_id, items_id,
                         total_items_count, price, show_price, show_market_price,
                         uid, payment_time, is_my_publish, uspace_jump_url,
-                        uface, uname, publish_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        uface, uname, publish_status, is_blacklisted
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     item['c2cItemsId'],
                     item['type'],
@@ -284,8 +365,13 @@ class BiliMallSpider:
                     item['uspaceJumpUrl'],
                     item['uface'],
                     item['uname'],
-                    1  # 默认在售状态
+                    1,  # 默认在售状态
+                    1 if is_blacklisted else 0  # 是否是黑名单用户
                 ))
+                
+                # 检查是否是可疑用户
+                if self.check_suspicious_user(item['uid'], item['uname'], sku['skuId']):
+                    print(f"用户 {item['uname']}(UID:{item['uid']}) 被标记为可疑用户")
             
             self.conn.commit()
             print(f"商品 {item['c2cItemsId']} {'更新' if existing_item else '新增'} 成功")
@@ -300,6 +386,79 @@ class BiliMallSpider:
             print(f"保存数据出错: {e}")
             self.conn.rollback()
             raise
+
+    def check_suspicious_users(self):
+        """检查最近一小时内频繁上架的用户"""
+        try:
+            print("\n=== 检查可疑用户 ===")
+            
+            # 查找最近一小时内对同一SKU上架超过20次的用户
+            self.cursor.execute("""
+                WITH user_stats AS (
+                    SELECT 
+                        c.uid,
+                        c.uname,
+                        c.sku_id,
+                        s.name as sku_name,
+                        COUNT(*) as listing_count,
+                        MIN(c.created_at) as first_listing,
+                        MAX(c.created_at) as last_listing
+                    FROM c2c_items c
+                    JOIN skus s ON c.sku_id = s.sku_id
+                    WHERE c.created_at >= datetime('now', '-1 hour')
+                    GROUP BY c.uid, c.uname, c.sku_id
+                    HAVING listing_count >= 20
+                )
+                SELECT us.*
+                FROM user_stats us
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM blacklist b 
+                    WHERE b.uid = us.uid
+                )
+            """)
+            
+            suspicious_users = self.cursor.fetchall()
+            
+            if not suspicious_users:
+                print("未发现可疑用户")
+                return
+            
+            print(f"发现 {len(suspicious_users)} 个可疑用户")
+            
+            for user in suspicious_users:
+                try:
+                    # 添加到黑名单
+                    self.cursor.execute("""
+                        INSERT INTO blacklist (uid, uname, reason)
+                        VALUES (?, ?, ?)
+                    """, (
+                        user['uid'],
+                        user['uname'],
+                        f"自动加入黑名单：1小时内对商品 {user['sku_name']} 上架 {user['listing_count']} 次"
+                    ))
+                    
+                    # 更新该用户所有商品的黑名单标记
+                    self.cursor.execute("""
+                        UPDATE c2c_items 
+                        SET is_blacklisted = 1
+                        WHERE uid = ?
+                    """, (user['uid'],))
+                    
+                    print(f"用户 {user['uname']}(UID:{user['uid']}) 已加入黑名单")
+                    print(f"原因：1小时内对商品 {user['sku_name']} 上架 {user['listing_count']} 次")
+                    print(f"首次上架时间：{user['first_listing']}")
+                    print(f"最后上架时间：{user['last_listing']}")
+                    
+                except sqlite3.IntegrityError:
+                    # 用户已在黑名单中，忽略
+                    continue
+            
+            self.conn.commit()
+            print("=== 可疑用户检查完成 ===\n")
+            
+        except Exception as e:
+            print(f"检查可疑用户时出错: {e}")
+            self.conn.rollback()
 
     def run(self, max_pages=100):
         """持续运行爬虫，达到最大页数后从头开始"""
@@ -373,6 +532,12 @@ class BiliMallSpider:
                     print(f"跳过多SKU商品: {skipped_items}")
                     print(f"跳过非类型1商品: {skipped_type_items}")
                     print(f"连续重复页数: {self.duplicate_count}/{self.max_duplicate_pages}")
+                    
+                    # 在每轮结束时检查可疑用户
+                    self.check_suspicious_users()
+                    
+                    print(f"\n等待{self.round_sleep}秒（{self.round_sleep/60:.1f}分钟）后开始下一轮爬取...")
+                    time.sleep(self.round_sleep)
                     
                 except Exception as e:
                     print(f"爬取过程出错: {e}")

@@ -1,68 +1,71 @@
 <template>
   <div class="item-list">
-    <el-table 
-      :data="items" 
-      style="width: 100%"
-      v-loading="loading"
-      border
-      stripe
-    >
-      <el-table-column label="卖家" min-width="200">
-        <template #default="scope">
+    <el-table :data="items" style="width: 100%">
+      <el-table-column label="卖家信息" width="200">
+        <template #default="{ row }">
           <div class="seller-info">
+            <el-image 
+              :size="40" 
+              :src="row.seller_avatar"
+              referrerpolicy="no-referrer"
+              style="width: 40px; height: 40px; border-radius: 4px;"
+              :preview-src-list="[]"
+            >
+              <template #error>
+                <div class="avatar-error">
+                  <el-icon><User /></el-icon>
+                </div>
+              </template>
+            </el-image>
             <div class="seller-detail">
-              <div class="seller-info-row">
-                <span class="seller-name">{{ scope.row.seller_name }}</span>
-                <span class="seller-uid">UID: {{ scope.row.seller_uid }}</span>
+              <span class="seller-name">
+                {{ row.seller_name }}
                 <el-tag 
-                  :type="scope.row.publish_status === 1 ? 'success' : 'danger'"
+                  v-if="row.is_blacklisted" 
+                  type="danger" 
                   size="small"
                 >
-                  {{ scope.row.publish_status === 1 ? '在售' : '已下架' }}
+                  黑名单
                 </el-tag>
-              </div>
-              <template v-if="scope.row.seller_url">
-                <el-link
-                  type="primary"
-                  :href="scope.row.seller_url"
-                  target="_blank"
-                  class="seller-space"
-                >
-                  个人空间
-                </el-link>
-              </template>
+              </span>
+              <el-link 
+                :href="row.seller_url" 
+                target="_blank"
+                type="primary"
+                class="seller-uid"
+              >
+                UID: {{ row.seller_uid }}
+              </el-link>
             </div>
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="price" label="价格" width="120" align="right">
-        <template #default="scope">
-          <span class="price">¥{{ scope.row.price.toFixed(2) }}</span>
+      <el-table-column prop="price" label="价格" width="120">
+        <template #default="{ row }">
+          ¥{{ row.price.toFixed(2) }}
         </template>
       </el-table-column>
-      <el-table-column prop="market_price" label="市场价" width="120" align="right">
-        <template #default="scope">
-          <span class="market-price">¥{{ scope.row.market_price.toFixed(2) }}</span>
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.publish_status === 1 ? 'success' : 'danger'">
+            {{ row.publish_status === 1 ? '在售' : '已下架' }}
+          </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
-        <template #default="scope">
-          <el-button
+      <el-table-column label="上架时间" width="180">
+        <template #default="{ row }">
+          {{ formatDate(row.created_at) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="120" fixed="right">
+        <template #default="{ row }">
+          <el-link 
+            :href="row.url" 
+            target="_blank"
             type="primary"
-            size="small"
-            @click="openItemUrl(scope.row.url)"
-            :type="scope.row.publish_status === 1 ? 'primary' : 'warning'"
           >
-            {{ scope.row.publish_status === 1 ? '查看商品' : '查看链接' }}
-          </el-button>
-          <el-button
-            v-if="scope.row.seller_url"
-            type="info"
-            size="small"
-            @click="openSellerUrl(scope.row.seller_url)"
-          >
-            查看店铺
-          </el-button>
+            查看详情
+          </el-link>
         </template>
       </el-table-column>
     </el-table>
@@ -70,31 +73,55 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { ItemDetail } from '../types'
+import { defineProps } from 'vue'
+import { User } from '@element-plus/icons-vue'
 
-defineProps<{
+interface ItemDetail {
+  c2c_items_id: number
+  seller_name: string
+  seller_uid: string
+  seller_avatar: string
+  seller_url: string
+  price: number
+  market_price: number
+  url: string
+  publish_status: number
+  created_at: string
+  is_blacklisted: boolean
+}
+
+const props = defineProps<{
   items: ItemDetail[]
 }>()
 
-const loading = ref(false)
-
-const openItemUrl = (url: string) => {
-  window.open(url, '_blank')
-}
-
-const openSellerUrl = (url: string) => {
-  window.open(url, '_blank')
+const formatDate = (dateStr: string) => {
+  const date = new Date(dateStr)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
 }
 </script>
 
 <style scoped>
-.item-list {
-  margin-top: 20px;
+.avatar-error {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #f5f7fa;
+  color: #909399;
 }
 
 .seller-info {
   display: flex;
+  align-items: center;
   gap: 12px;
 }
 
@@ -104,60 +131,18 @@ const openSellerUrl = (url: string) => {
   gap: 4px;
 }
 
-.seller-info-row {
+.seller-name {
+  font-weight: 500;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-}
-
-.seller-name {
-  font-size: 14px;
-  color: #333;
-  font-weight: 500;
 }
 
 .seller-uid {
   font-size: 12px;
-  color: #909399;
 }
 
-.seller-space {
-  font-size: 12px;
-}
-
-.price {
-  font-weight: bold;
-  color: #f56c6c;
-}
-
-.market-price {
-  color: #909399;
-  text-decoration: line-through;
-}
-
-:deep(.el-button + .el-button) {
-  margin-left: 8px;
-}
-
-:deep(.el-table) {
-  --el-table-border-color: #ebeef5;
-  --el-table-header-bg-color: #f5f7fa;
-}
-
-:deep(.el-table__header) {
-  font-weight: 600;
-}
-
-:deep(.el-tag) {
-  margin-left: 4px;
-}
-
-:deep(.el-tag--success) {
-  background-color: var(--el-color-success-light-9);
-}
-
-:deep(.el-tag--danger) {
-  background-color: var(--el-color-danger-light-9);
+:deep(.el-avatar) {
+  border-radius: 4px;
 }
 </style> 

@@ -86,10 +86,7 @@
             <div class="total-items">
               在售数量: {{ sku.total_items }}
             </div>
-            <div class="button-group">
-              <el-button type="primary" @click="showItems(sku.sku_id)">查看详情</el-button>
-              <el-button type="danger" @click="handleSingleDelete(sku.sku_id)">删除</el-button>
-            </div>
+            <el-button type="primary" @click="showItems(sku.sku_id)">查看详情</el-button>
           </div>
         </el-card>
       </el-col>
@@ -118,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted } from 'vue'
 import axios from 'axios'
 import { Picture, PictureFilled, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -155,7 +152,6 @@ const currentPage = ref(1)
 const pageSize = ref(100)
 const sortBy = ref('total_items')
 const selectedSkus = ref<number[]>([])
-const isAllSelected = ref(false)
 
 const fetchBrands = async () => {
   try {
@@ -294,65 +290,6 @@ const handleBatchDelete = async () => {
   }
 }
 
-const toggleSelectAll = (checked: boolean) => {
-  if (checked) {
-    // 全选当前页的所有商品
-    selectedSkus.value = skuList.value.items.map(item => item.sku_id)
-  } else {
-    // 取消全选
-    selectedSkus.value = []
-  }
-}
-
-// 监听选中状态变化，更新全选状态
-watch(selectedSkus, (newVal) => {
-  isAllSelected.value = newVal.length === skuList.value.items.length && newVal.length > 0
-})
-
-// 添加单个删除方法
-const handleSingleDelete = async (skuId: number) => {
-  try {
-    await ElMessageBox.confirm(
-      '确定要删除该商品吗？删除后将同时删除该商品的所有 SKU，此操作不可恢复！',
-      '确认删除',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    )
-
-    const response = await axios.delete('http://localhost:8000/api/products/batch', {
-      data: {
-        productIds: [skuId]
-      }
-    })
-
-    if (response.data.success) {
-      ElMessage.success('删除成功')
-      // 刷新列表
-      fetchSkus(
-        selectedBrand.value || undefined,
-        currentPage.value,
-        pageSize.value,
-        searchKeyword.value,
-        sortBy.value
-      )
-      // 从选中列表中移除
-      const index = selectedSkus.value.indexOf(skuId)
-      if (index > -1) {
-        selectedSkus.value.splice(index, 1)
-      }
-    } else {
-      throw new Error(response.data.message)
-    }
-  } catch (error) {
-    if (error instanceof Error) {
-      ElMessage.error('删除失败：' + error.message)
-    }
-  }
-}
-
 onMounted(() => {
   fetchSkus(undefined, currentPage.value, pageSize.value, searchKeyword.value, sortBy.value)
   fetchBrands()
@@ -457,15 +394,5 @@ onMounted(() => {
 
 .sku-card {
   position: relative;
-}
-
-.button-group {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-:deep(.el-checkbox__label) {
-  font-size: 14px;
 }
 </style> 
