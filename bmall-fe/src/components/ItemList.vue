@@ -1,22 +1,22 @@
 <template>
   <div class="item-list">
-    <el-table :data="items" style="width: 100%">
+    <div class="filter-bar">
+      <el-switch
+        v-model="showOffline"
+        active-text="显示下架商品"
+        @change="handleFilterChange"
+      />
+    </div>
+
+    <el-table :data="currentItems" style="width: 100%">
       <el-table-column label="卖家信息" width="200">
         <template #default="{ row }">
           <div class="seller-info">
-            <el-image 
+            <el-avatar 
               :size="40" 
               :src="row.seller_avatar"
               referrerpolicy="no-referrer"
-              style="width: 40px; height: 40px; border-radius: 4px;"
-              :preview-src-list="[]"
-            >
-              <template #error>
-                <div class="avatar-error">
-                  <el-icon><User /></el-icon>
-                </div>
-              </template>
-            </el-image>
+            />
             <div class="seller-detail">
               <span class="seller-name">
                 {{ row.seller_name }}
@@ -69,12 +69,24 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <div class="pagination-container">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        :total="filteredItems.length"
+        layout="total, sizes, prev, pager, next"
+        @size-change="handleSizeChange"
+        @current-change="handleCurrentChange"
+      />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { defineProps } from 'vue'
-import { User } from '@element-plus/icons-vue'
+import { ref, computed } from 'vue'
+import { toBeijingTime } from '../utils/date'
 
 interface ItemDetail {
   c2c_items_id: number
@@ -94,29 +106,51 @@ const props = defineProps<{
   items: ItemDetail[]
 }>()
 
+const showOffline = ref(false)
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+// 过滤商品列表
+const filteredItems = computed(() => {
+  return showOffline.value 
+    ? props.items 
+    : props.items.filter(item => item.publish_status === 1)
+})
+
+// 当前页的商品
+const currentItems = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredItems.value.slice(start, end)
+})
+
+const handleFilterChange = () => {
+  currentPage.value = 1
+}
+
+const handleSizeChange = (size: number) => {
+  pageSize.value = size
+  currentPage.value = 1
+}
+
+const handleCurrentChange = (page: number) => {
+  currentPage.value = page
+}
+
 const formatDate = (dateStr: string) => {
-  const date = new Date(dateStr)
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  })
+  return toBeijingTime(dateStr) as string
 }
 </script>
 
 <style scoped>
-.avatar-error {
-  width: 100%;
-  height: 100%;
+.item-list {
+  padding: 20px 0;
+}
+
+.filter-bar {
+  margin-bottom: 20px;
   display: flex;
-  justify-content: center;
-  align-items: center;
-  background-color: #f5f7fa;
-  color: #909399;
+  justify-content: flex-end;
 }
 
 .seller-info {
@@ -140,6 +174,12 @@ const formatDate = (dateStr: string) => {
 
 .seller-uid {
   font-size: 12px;
+}
+
+.pagination-container {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
 }
 
 :deep(.el-avatar) {

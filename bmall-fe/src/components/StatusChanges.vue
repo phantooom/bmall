@@ -42,8 +42,8 @@
       </el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.publish_status === 1 ? 'success' : 'danger'">
-            {{ row.publish_status === 1 ? '在售' : '已下架' }}
+          <el-tag :type="getStatusType(row.publish_status)">
+            {{ getStatusText(row.publish_status) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -164,6 +164,28 @@ const showItems = async (skuId: number) => {
     dialogVisible.value = true
   } catch (error) {
     ElMessage.error('获取商品详情失败')
+  }
+}
+
+const getStatusType = (status: number) => {
+  switch (status) {
+    case 1:
+      return 'success'
+    case -2:
+      return 'warning'
+    default:
+      return 'danger'
+  }
+}
+
+const getStatusText = (status: number) => {
+  switch (status) {
+    case 1:
+      return '在售'
+    case -2:
+      return '已售'
+    default:
+      return '已下架'
   }
 }
 

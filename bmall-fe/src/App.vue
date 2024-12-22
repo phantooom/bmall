@@ -27,6 +27,12 @@
         >
           用户管理
         </el-button>
+        <el-button 
+          :type="currentTab === 'stats' ? 'primary' : 'default'"
+          @click="switchTab('stats')"
+        >
+          数据统计
+        </el-button>
       </div>
     </div>
 
@@ -36,7 +42,8 @@
         <sku-list v-if="currentTab === 'home'" />
         <brand-manage v-else-if="currentTab === 'brand'" />
         <status-changes v-else-if="currentTab === 'status'" />
-        <user-manage v-else />
+        <user-manage v-else-if="currentTab === 'user'" />
+        <statistics v-else />
       </div>
     </div>
   </div>
@@ -48,10 +55,11 @@ import SkuList from './components/SkuList.vue'
 import BrandManage from './components/BrandManage.vue'
 import StatusChanges from './components/StatusChanges.vue'
 import UserManage from './components/UserManage.vue'
+import Statistics from './components/Statistics.vue'
 
 const currentTab = ref('home')
 
-const switchTab = (tab: 'home' | 'brand' | 'status' | 'user') => {
+const switchTab = (tab: 'home' | 'brand' | 'status' | 'user' | 'stats') => {
   currentTab.value = tab
 }
 </script>

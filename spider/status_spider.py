@@ -70,7 +70,16 @@ class BiliMallStatusSpider:
                 time.sleep(self.error_sleep)
                 return None
             
-            return data['data'].get('publishStatus', None)
+            # 获取状态
+            publish_status = data['data'].get('publishStatus', None)
+            sale_status = data['data'].get('saleStatus', None)
+            
+            # 如果已售出，返回特定状态码
+            if sale_status == 2:
+                print(f"商品 {item_id} 已售出")
+                return -2  # 使用 -2 表示已售出状态
+            
+            return publish_status
             
         except requests.exceptions.RequestException as e:
             print(f"请求异常: {e}")
@@ -132,7 +141,8 @@ class BiliMallStatusSpider:
                         ELSE 2  -- 已检查过的优先级较低
                     END as check_priority
                 FROM c2c_items i
-                WHERE i.publish_status = 1
+                WHERE i.publish_status = 1 
+                  AND (i.publish_status != -2 OR i.publish_status IS NULL)  -- 排除已售商品
             )
             SELECT 
                 id,

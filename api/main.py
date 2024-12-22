@@ -775,8 +775,8 @@ async def get_user_stats():
     finally:
         conn.close()
 
-@app.get("/api/user/{uid}/items")
-async def get_user_items(uid: str):
+@app.get("/api/user/items")
+async def get_user_items(uid: str, uname: str):
     """获取指定用户的所有商品"""
     try:
         conn = get_db()
@@ -795,10 +795,10 @@ async def get_user_items(uid: str):
                 MAX(c.created_at) as last_listing
             FROM c2c_items c
             JOIN skus s ON c.sku_id = s.sku_id
-            WHERE c.uid = ?
+            WHERE c.uid = ? AND c.uname = ?
             GROUP BY s.sku_id, s.name, s.img, s.market_price
             ORDER BY last_listing DESC
-        """, (uid,))
+        """, (uid, uname))
         
         results = []
         for row in cursor.fetchall():
@@ -821,6 +821,147 @@ async def get_user_items(uid: str):
                 "max_price": float(row['max_price']),
                 "first_listing": row['first_listing'],
                 "last_listing": row['last_listing']
+            })
+        
+        return results
+    finally:
+        conn.close()
+
+@app.get("/api/statistics")
+async def get_statistics():
+    """获取统计数据"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 定义时间段
+        periods = [
+            ('1小时', 'datetime("now", "-1 hour")'),
+            ('3小时', 'datetime("now", "-3 hours")'),
+            ('6小时', 'datetime("now", "-6 hours")'),
+            ('12小时', 'datetime("now", "-12 hours")'),
+            ('24小时', 'datetime("now", "-24 hours")')
+        ]
+        
+        results = {}
+        
+        for period_name, period_sql in periods:
+            # 新增商品数量
+            cursor.execute(f"""
+                SELECT COUNT(*) as count
+                FROM c2c_items
+                WHERE created_at >= {period_sql}
+            """)
+            new_items = cursor.fetchone()['count']
+            
+            # 新增SKU数量
+            cursor.execute(f"""
+                SELECT COUNT(DISTINCT sku_id) as count
+                FROM c2c_items
+                WHERE created_at >= {period_sql}
+            """)
+            new_skus = cursor.fetchone()['count']
+            
+            # 新增封禁用户数量
+            cursor.execute(f"""
+                SELECT COUNT(*) as count
+                FROM blacklist
+                WHERE created_at >= {period_sql}
+            """)
+            new_blacklist = cursor.fetchone()['count']
+            
+            # 已售商品数量
+            cursor.execute(f"""
+                SELECT COUNT(*) as count
+                FROM c2c_items
+                WHERE publish_status = -2
+                AND last_check_time >= {period_sql}
+            """)
+            sold_items = cursor.fetchone()['count']
+            
+            # 获取最活跃用户
+            cursor.execute(f"""
+                SELECT 
+                    uid,
+                    uname,
+                    COUNT(*) as listing_count,
+                    COUNT(DISTINCT sku_id) as sku_count,
+                    MIN(created_at) as first_listing,
+                    MAX(created_at) as last_listing,
+                    (
+                        SELECT reason 
+                        FROM blacklist b 
+                        WHERE b.uid = c.uid
+                        LIMIT 1
+                    ) as blacklist_reason
+                FROM c2c_items c
+                WHERE created_at >= {period_sql}
+                GROUP BY uid, uname
+                ORDER BY listing_count DESC
+                LIMIT 5
+            """)
+            
+            active_users = []
+            for row in cursor.fetchall():
+                active_users.append({
+                    "uid": row['uid'],
+                    "uname": row['uname'],
+                    "listing_count": row['listing_count'],
+                    "sku_count": row['sku_count'],
+                    "first_listing": row['first_listing'],
+                    "last_listing": row['last_listing'],
+                    "is_blacklisted": row['blacklist_reason'] is not None,
+                    "blacklist_reason": row['blacklist_reason']
+                })
+            
+            results[period_name] = {
+                "new_items": new_items,
+                "new_skus": new_skus,
+                "new_blacklist": new_blacklist,
+                "sold_items": sold_items,
+                "active_users": active_users
+            }
+        
+        return results
+    finally:
+        conn.close()
+
+@app.get("/api/statistics/trend")
+async def get_statistics_trend():
+    """获取最近一小时的趋势数据（按分钟）"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 获取最近60分钟的数据
+        cursor.execute("""
+            WITH RECURSIVE 
+            minutes(minute) AS (
+                SELECT datetime('now', '-59 minutes')
+                UNION ALL
+                SELECT datetime(minute, '+1 minutes')
+                FROM minutes
+                WHERE minute < datetime('now')
+            )
+            SELECT 
+                strftime('%H:%M', datetime(m.minute, '+8 hours')) as time,
+                COUNT(c.id) as items_count,
+                COUNT(DISTINCT c.sku_id) as skus_count,
+                COUNT(DISTINCT c.uid) as users_count
+            FROM minutes m
+            LEFT JOIN c2c_items c ON 
+                strftime('%Y-%m-%d %H:%M', c.created_at) = strftime('%Y-%m-%d %H:%M', datetime(m.minute))
+            GROUP BY m.minute
+            ORDER BY m.minute
+        """)
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "time": row['time'],
+                "items_count": row['items_count'],
+                "skus_count": row['skus_count'],
+                "users_count": row['users_count']
             })
         
         return results

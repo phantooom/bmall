@@ -387,12 +387,12 @@ class BiliMallSpider:
             self.conn.rollback()
             raise
 
-    def check_suspicious_users(self):
-        """检查最近一小时内频繁上架的用户"""
+    def check_blacklist_users(self):
+        """检查一天内频繁上架的用户"""
         try:
-            print("\n=== 检查可疑用户 ===")
+            print("\n=== 检查黑名单用户 ===")
             
-            # 查找最近一小时内对同一SKU上架超过20次的用户
+            # 查找一天内对同一SKU上架超过20次的用户
             self.cursor.execute("""
                 WITH user_stats AS (
                     SELECT 
@@ -405,7 +405,7 @@ class BiliMallSpider:
                         MAX(c.created_at) as last_listing
                     FROM c2c_items c
                     JOIN skus s ON c.sku_id = s.sku_id
-                    WHERE c.created_at >= datetime('now', '-1 hour')
+                    WHERE c.created_at >= datetime('now', '-24 hours')
                     GROUP BY c.uid, c.uname, c.sku_id
                     HAVING listing_count >= 20
                 )
@@ -420,10 +420,10 @@ class BiliMallSpider:
             suspicious_users = self.cursor.fetchall()
             
             if not suspicious_users:
-                print("未发现可疑用户")
+                print("未发现黑名单用户")
                 return
             
-            print(f"发现 {len(suspicious_users)} 个可疑用户")
+            print(f"发现 {len(suspicious_users)} 个黑名单用户")
             
             for user in suspicious_users:
                 try:
@@ -432,37 +432,51 @@ class BiliMallSpider:
                         INSERT INTO blacklist (uid, uname, reason)
                         VALUES (?, ?, ?)
                     """, (
-                        user['uid'],
-                        user['uname'],
-                        f"自动加入黑名单：1小时内对商品 {user['sku_name']} 上架 {user['listing_count']} 次"
+                        user[0],  # uid
+                        user[1],  # uname
+                        f"自动加入黑名单：24小时内对商品 {user[3]} 上架 {user[4]} 次"  # sku_name, listing_count
                     ))
                     
-                    # 更新该用户所有商品的黑名单标记
+                    # 更新该用户在该SKU下所有商品的状态为-1
                     self.cursor.execute("""
                         UPDATE c2c_items 
-                        SET is_blacklisted = 1
-                        WHERE uid = ?
-                    """, (user['uid'],))
+                        SET publish_status = -1,
+                            is_blacklisted = 1,
+                            last_check_time = CURRENT_TIMESTAMP
+                        WHERE uid = ? AND sku_id = ?
+                    """, (user[0], user[2]))  # uid, sku_id
                     
-                    print(f"用户 {user['uname']}(UID:{user['uid']}) 已加入黑名单")
-                    print(f"原因：1小时内对商品 {user['sku_name']} 上架 {user['listing_count']} 次")
-                    print(f"首次上架时间：{user['first_listing']}")
-                    print(f"最后上架时间：{user['last_listing']}")
+                    print(f"用户 {user[1]}(UID:{user[0]}) 已加入黑名单")
+                    print(f"原因：24小时内对商品 {user[3]} 上架 {user[4]} 次")
+                    print(f"首次上架时间：{user[5]}")
+                    print(f"最后上架时间：{user[6]}")
                     
                 except sqlite3.IntegrityError:
-                    # 用户已在黑名单中，忽略
+                    # 用户已在黑名单中，只更新商品状态
+                    self.cursor.execute("""
+                        UPDATE c2c_items 
+                        SET publish_status = -1,
+                            is_blacklisted = 1,
+                            last_check_time = CURRENT_TIMESTAMP
+                        WHERE uid = ? AND sku_id = ?
+                    """, (user[0], user[2]))  # uid, sku_id
                     continue
             
             self.conn.commit()
-            print("=== 可疑用户检查完成 ===\n")
+            print("=== 黑名单用户检查完成 ===\n")
             
         except Exception as e:
-            print(f"检查可疑用户时出错: {e}")
+            print(f"检查黑名单用户时出错: {e}")
+            import traceback
+            print(traceback.format_exc())
             self.conn.rollback()
 
     def run(self, max_pages=100):
         """持续运行爬虫，达到最大页数后从头开始"""
         while True:  # 外层循环，确保持续运行
+            # 在每轮开始前检查黑名单用户
+            self.check_blacklist_users()
+            
             next_id = None
             page = 0
             total_items = 0
@@ -532,9 +546,6 @@ class BiliMallSpider:
                     print(f"跳过多SKU商品: {skipped_items}")
                     print(f"跳过非类型1商品: {skipped_type_items}")
                     print(f"连续重复页数: {self.duplicate_count}/{self.max_duplicate_pages}")
-                    
-                    # 在每轮结束时检查可疑用户
-                    self.check_suspicious_users()
                     
                     print(f"\n等待{self.round_sleep}秒（{self.round_sleep/60:.1f}分钟）后开始下一轮爬取...")
                     time.sleep(self.round_sleep)

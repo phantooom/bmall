@@ -5,6 +5,7 @@
         <el-checkbox 
           v-model="isAllSelected"
           @change="toggleSelectAll"
+          :indeterminate="isIndeterminate"
         >
           全选
         </el-checkbox>
@@ -51,7 +52,7 @@
           <div class="card-selection">
             <el-checkbox 
               :model-value="selectedSkus.includes(sku.sku_id)"
-              @change="() => toggleSelection(sku.sku_id)"
+              @update:model-value="(val) => toggleSelection(sku.sku_id, val)"
             />
           </div>
           <el-image 
@@ -86,7 +87,10 @@
             <div class="total-items">
               在售数量: {{ sku.total_items }}
             </div>
-            <el-button type="primary" @click="showItems(sku.sku_id)">查看详情</el-button>
+            <div class="button-group">
+              <el-button type="primary" @click="showItems(sku.sku_id)">查看详情</el-button>
+              <el-button type="danger" @click="handleDelete(sku.sku_id)">删除</el-button>
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -115,7 +119,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import axios from 'axios'
 import { Picture, PictureFilled, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -152,6 +156,8 @@ const currentPage = ref(1)
 const pageSize = ref(100)
 const sortBy = ref('total_items')
 const selectedSkus = ref<number[]>([])
+const isAllSelected = ref(false)
+const isIndeterminate = ref(false)
 
 const fetchBrands = async () => {
   try {
@@ -236,14 +242,38 @@ const showItems = async (skuId: number) => {
   }
 }
 
-const toggleSelection = (skuId: number) => {
-  const index = selectedSkus.value.indexOf(skuId)
-  if (index === -1) {
+const toggleSelection = (skuId: number, checked: boolean) => {
+  if (checked) {
     selectedSkus.value.push(skuId)
   } else {
-    selectedSkus.value.splice(index, 1)
+    const index = selectedSkus.value.indexOf(skuId)
+    if (index !== -1) {
+      selectedSkus.value.splice(index, 1)
+    }
   }
+  updateSelectAllStatus()
 }
+
+const toggleSelectAll = (val: boolean) => {
+  if (val) {
+    selectedSkus.value = skuList.value.items.map(sku => sku.sku_id)
+  } else {
+    selectedSkus.value = []
+  }
+  isIndeterminate.value = false
+}
+
+const updateSelectAllStatus = () => {
+  const total = skuList.value.items.length
+  const selected = selectedSkus.value.length
+  isAllSelected.value = selected === total && total > 0
+  isIndeterminate.value = selected > 0 && selected < total
+}
+
+// 在数据更新时也要更新全选状态
+watch(() => skuList.value.items, () => {
+  updateSelectAllStatus()
+}, { deep: true })
 
 const handleBatchDelete = async () => {
   if (!selectedSkus.value.length) {
@@ -280,6 +310,44 @@ const handleBatchDelete = async () => {
       )
       // 清空选择
       selectedSkus.value = []
+    } else {
+      throw new Error(response.data.message)
+    }
+  } catch (error) {
+    if (error instanceof Error) {
+      ElMessage.error('删除失败：' + error.message)
+    }
+  }
+}
+
+const handleDelete = async (skuId: number) => {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除该商品吗？删除后将同时删除该商品的所有 SKU，此操作不可恢复！',
+      '确认删除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    const response = await axios.delete('http://localhost:8000/api/products/batch', {
+      data: {
+        productIds: [skuId]
+      }
+    })
+
+    if (response.data.success) {
+      ElMessage.success('删除成功')
+      // 刷新列表
+      fetchSkus(
+        selectedBrand.value || undefined,
+        currentPage.value,
+        pageSize.value,
+        searchKeyword.value,
+        sortBy.value
+      )
     } else {
       throw new Error(response.data.message)
     }
@@ -394,5 +462,11 @@ onMounted(() => {
 
 .sku-card {
   position: relative;
+}
+
+.button-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 </style> 
