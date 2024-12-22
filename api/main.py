@@ -441,6 +441,86 @@ async def delete_brand(brand_id: int):
     finally:
         conn.close()
 
+@app.get("/api/status-changes")
+async def get_status_changes(page: int = 1, page_size: int = 20):
+    """获取最近状态发生变更的商品"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 获取总记录数
+        cursor.execute("""
+            SELECT COUNT(DISTINCT c.id) as total
+            FROM c2c_items c
+            JOIN skus s ON c.sku_id = s.sku_id
+            WHERE c.last_check_time >= datetime('now', '-24 hours')
+                AND c.publish_status != 1
+        """)
+        total = cursor.fetchone()['total']
+        
+        # 计算分页
+        offset = (page - 1) * page_size
+        
+        # 获取分页数据，添加用户信息
+        cursor.execute("""
+            SELECT DISTINCT
+                c.id,
+                s.sku_id,
+                s.name,
+                s.img,
+                c.price,
+                c.publish_status,
+                c.last_check_time,
+                c.uname as seller_name,
+                c.uid as seller_uid,
+                c.uspace_jump_url as seller_url
+            FROM c2c_items c
+            JOIN skus s ON c.sku_id = s.sku_id
+            WHERE c.last_check_time >= datetime('now', '-24 hours')
+                AND c.publish_status != 1
+            ORDER BY c.last_check_time DESC
+            LIMIT ? OFFSET ?
+        """, (page_size, offset))
+        
+        results = []
+        for row in cursor.fetchall():
+            img_url = row['img']
+            if img_url:
+                if img_url.startswith('//'):
+                    img_url = f"https:{img_url}"
+                if '/bfs/' not in img_url:
+                    img_url = img_url.replace('i0.hdslb.com', 'i0.hdslb.com/bfs')
+                    img_url = img_url.replace('i1.hdslb.com', 'i1.hdslb.com/bfs')
+                    img_url = img_url.replace('i2.hdslb.com', 'i2.hdslb.com/bfs')
+                
+            # 处理个人空间URL
+            seller_url = row['seller_url']
+            if seller_url and not seller_url.startswith('http'):
+                seller_url = f"https://space.bilibili.com/{row['seller_uid']}"
+                
+            results.append({
+                "id": row['id'],
+                "sku_id": row['sku_id'],
+                "name": row['name'],
+                "img": img_url,
+                "price": float(row['price']),
+                "publish_status": row['publish_status'],
+                "last_check_time": row['last_check_time'],
+                "seller_name": row['seller_name'],
+                "seller_uid": row['seller_uid'],
+                "seller_url": seller_url
+            })
+        
+        return {
+            "items": results,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size
+        }
+    finally:
+        conn.close()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 

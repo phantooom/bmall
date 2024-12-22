@@ -15,6 +15,12 @@
         >
           品牌管理
         </el-button>
+        <el-button 
+          :type="currentTab === 'status' ? 'primary' : 'default'"
+          @click="switchTab('status')"
+        >
+          商品状态
+        </el-button>
       </div>
     </div>
 
@@ -22,7 +28,8 @@
     <div class="main-container">
       <div class="content-wrapper">
         <sku-list v-if="currentTab === 'home'" />
-        <brand-manage v-else />
+        <brand-manage v-else-if="currentTab === 'brand'" />
+        <status-changes v-else />
       </div>
     </div>
   </div>
@@ -32,10 +39,11 @@
 import { ref } from 'vue'
 import SkuList from './components/SkuList.vue'
 import BrandManage from './components/BrandManage.vue'
+import StatusChanges from './components/StatusChanges.vue'
 
 const currentTab = ref('home')
 
-const switchTab = (tab: 'home' | 'brand') => {
+const switchTab = (tab: 'home' | 'brand' | 'status') => {
   currentTab.value = tab
 }
 </script>
