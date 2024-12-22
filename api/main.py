@@ -77,6 +77,7 @@ async def get_brands():
 async def get_sku_list(
     brand_id: Optional[int] = None,
     keyword: Optional[str] = None,
+    sort_by: Optional[str] = "total_items",
     page: int = 1,
     page_size: int = 100
 ):
@@ -98,6 +99,12 @@ async def get_sku_list(
             )
         """
         
+        # 修改排序逻辑
+        order_by = {
+            "total_items": "total_items DESC",
+            "min_price": "min_price ASC"
+        }.get(sort_by, "total_items DESC")
+        
         # 主查询
         base_query = """
             WITH filtered_items AS (
@@ -109,7 +116,7 @@ async def get_sku_list(
                 WHERE 1=1
                 {brand_filter}
             ),
-            WITH sku_stats AS (
+            sku_stats AS (
                 SELECT 
                     s.sku_id,
                     s.name,
@@ -134,7 +141,7 @@ async def get_sku_list(
                 total_items
             FROM sku_stats
             WHERE total_items > 0
-            ORDER BY total_items DESC
+            ORDER BY {order_by}
             LIMIT ? OFFSET ?
         """
         
@@ -158,7 +165,10 @@ async def get_sku_list(
         # 添加主查询的参数
         params.extend([keyword, search_term])  # 添加搜索参数
         params.extend([page_size, (page - 1) * page_size])  # 添加分页参数
-        query = base_query.format(brand_filter=brand_filter)
+        query = base_query.format(
+            brand_filter=brand_filter,
+            order_by=order_by
+        )
         cursor.execute(query, params)
         
         results = []

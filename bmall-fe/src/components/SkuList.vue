@@ -1,25 +1,33 @@
 <template>
   <div class="sku-list">
     <div class="filter-bar">
-      <el-input
-        v-model="searchKeyword"
-        placeholder="搜索商品"
-        clearable
-        @input="handleSearch"
-        class="search-input"
-      >
-        <template #prefix>
-          <el-icon><Search /></el-icon>
-        </template>
-      </el-input>
-      <el-select v-model="selectedBrand" placeholder="选择品牌" clearable @change="handleBrandChange">
-        <el-option
-          v-for="brand in brands"
-          :key="brand.id"
-          :label="`${brand.name} (${brand.total_items})`"
-          :value="brand.id"
-        />
-      </el-select>
+      <div class="sort-controls">
+        <el-radio-group v-model="sortBy" @change="handleSortChange">
+          <el-radio-button label="total_items">按数量</el-radio-button>
+          <el-radio-button label="min_price">按价格</el-radio-button>
+        </el-radio-group>
+      </div>
+      <div class="right-controls">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索商品"
+          clearable
+          @input="handleSearch"
+          class="search-input"
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-select v-model="selectedBrand" placeholder="选择品牌" clearable @change="handleBrandChange">
+          <el-option
+            v-for="brand in brands"
+            :key="brand.id"
+            :label="`${brand.name} (${brand.total_items})`"
+            :value="brand.id"
+          />
+        </el-select>
+      </div>
     </div>
     
     <el-row :gutter="20">
@@ -120,6 +128,7 @@ const dialogVisible = ref(false)
 const currentItems = ref<ItemDetail[]>([])
 const currentPage = ref(1)
 const pageSize = ref(100)
+const sortBy = ref('total_items')
 
 const fetchBrands = async () => {
   try {
@@ -134,7 +143,8 @@ const fetchSkus = async (
   brandId?: number, 
   page: number = 1, 
   pageSize: number = 100,
-  keyword?: string
+  keyword?: string,
+  sort?: string
 ) => {
   try {
     const url = new URL('http://localhost:8000/api/skus')
@@ -145,6 +155,9 @@ const fetchSkus = async (
     url.searchParams.set('page_size', pageSize.toString())
     if (keyword) {
       url.searchParams.set('keyword', keyword)
+    }
+    if (sort) {
+      url.searchParams.set('sort_by', sort)
     }
     
     const response = await axios.get<SkuListResponse>(url.toString())
@@ -162,22 +175,32 @@ const fetchSkus = async (
 
 const handleBrandChange = (brandId: number | null) => {
   currentPage.value = 1
-  fetchSkus(brandId || undefined, currentPage.value, pageSize.value, searchKeyword.value)
+  fetchSkus(brandId || undefined, currentPage.value, pageSize.value, searchKeyword.value, sortBy.value)
 }
 
 const handleSearch = (value: string) => {
   currentPage.value = 1
-  fetchSkus(selectedBrand.value || undefined, currentPage.value, pageSize.value, value)
+  fetchSkus(selectedBrand.value || undefined, currentPage.value, pageSize.value, value, sortBy.value)
 }
 
 const handleSizeChange = (size: number) => {
   pageSize.value = size
-  fetchSkus(selectedBrand.value || undefined, currentPage.value, size, searchKeyword.value)
+  fetchSkus(selectedBrand.value || undefined, currentPage.value, size, searchKeyword.value, sortBy.value)
 }
 
 const handleCurrentChange = (page: number) => {
   currentPage.value = page
-  fetchSkus(selectedBrand.value || undefined, page, pageSize.value, searchKeyword.value)
+  fetchSkus(selectedBrand.value || undefined, page, pageSize.value, searchKeyword.value, sortBy.value)
+}
+
+const handleSortChange = (value: string) => {
+  fetchSkus(
+    selectedBrand.value || undefined,
+    currentPage.value,
+    pageSize.value,
+    searchKeyword.value,
+    value
+  )
 }
 
 const showItems = async (skuId: number) => {
@@ -191,7 +214,7 @@ const showItems = async (skuId: number) => {
 }
 
 onMounted(() => {
-  fetchSkus(undefined, currentPage.value, pageSize.value, searchKeyword.value)
+  fetchSkus(undefined, currentPage.value, pageSize.value, searchKeyword.value, sortBy.value)
   fetchBrands()
 })
 </script>
@@ -255,10 +278,14 @@ onMounted(() => {
 
 .filter-bar {
   margin-bottom: 20px;
-  text-align: right;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.right-controls {
   display: flex;
   gap: 16px;
-  justify-content: flex-end;
   align-items: center;
 }
 
