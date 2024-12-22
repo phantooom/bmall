@@ -1,6 +1,21 @@
 <template>
   <div class="sku-list">
     <div class="filter-bar">
+      <div class="left-controls">
+        <el-checkbox 
+          v-model="isAllSelected"
+          @change="toggleSelectAll"
+        >
+          全选
+        </el-checkbox>
+        <el-button 
+          type="danger" 
+          :disabled="!selectedSkus.length"
+          @click="handleBatchDelete"
+        >
+          批量删除 ({{ selectedSkus.length }})
+        </el-button>
+      </div>
       <div class="sort-controls">
         <el-radio-group v-model="sortBy" @change="handleSortChange">
           <el-radio-button label="total_items">按数量</el-radio-button>
@@ -33,6 +48,12 @@
     <el-row :gutter="20">
       <el-col :span="6" v-for="sku in skuList.items" :key="sku.sku_id">
         <el-card :body-style="{ padding: '0px' }" class="sku-card">
+          <div class="card-selection">
+            <el-checkbox 
+              :model-value="selectedSkus.includes(sku.sku_id)"
+              @change="() => toggleSelection(sku.sku_id)"
+            />
+          </div>
           <el-image 
             :src="sku.img" 
             class="sku-image" 
@@ -65,7 +86,10 @@
             <div class="total-items">
               在售数量: {{ sku.total_items }}
             </div>
-            <el-button type="primary" @click="showItems(sku.sku_id)">查看详情</el-button>
+            <div class="button-group">
+              <el-button type="primary" @click="showItems(sku.sku_id)">查看详情</el-button>
+              <el-button type="danger" @click="handleSingleDelete(sku.sku_id)">删除</el-button>
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -94,9 +118,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import axios from 'axios'
 import { Picture, PictureFilled, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { SkuInfo, ItemDetail } from '../types'
 import ItemList from './ItemList.vue'
 
@@ -129,6 +154,8 @@ const currentItems = ref<ItemDetail[]>([])
 const currentPage = ref(1)
 const pageSize = ref(100)
 const sortBy = ref('total_items')
+const selectedSkus = ref<number[]>([])
+const isAllSelected = ref(false)
 
 const fetchBrands = async () => {
   try {
@@ -210,6 +237,119 @@ const showItems = async (skuId: number) => {
     dialogVisible.value = true
   } catch (error) {
     console.error('获取商品列表失败:', error)
+  }
+}
+
+const toggleSelection = (skuId: number) => {
+  const index = selectedSkus.value.indexOf(skuId)
+  if (index === -1) {
+    selectedSkus.value.push(skuId)
+  } else {
+    selectedSkus.value.splice(index, 1)
+  }
+}
+
+const handleBatchDelete = async () => {
+  if (!selectedSkus.value.length) {
+    ElMessage.warning('请先选择要删除的商品')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedSkus.value.length} 个商品吗？删除后将同时删除该商品的所有 SKU，此操作不可恢复！`,
+      '确认删除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    const response = await axios.delete('http://localhost:8000/api/products/batch', {
+      data: {
+        productIds: selectedSkus.value
+      }
+    })
+
+    if (response.data.success) {
+      ElMessage.success('删除成功')
+      // 刷新列表
+      fetchSkus(
+        selectedBrand.value || undefined,
+        currentPage.value,
+        pageSize.value,
+        searchKeyword.value,
+        sortBy.value
+      )
+      // 清空选择
+      selectedSkus.value = []
+    } else {
+      throw new Error(response.data.message)
+    }
+  } catch (error) {
+    if (error instanceof Error) {
+      ElMessage.error('删除失败：' + error.message)
+    }
+  }
+}
+
+const toggleSelectAll = (checked: boolean) => {
+  if (checked) {
+    // 全选当前页的所有商品
+    selectedSkus.value = skuList.value.items.map(item => item.sku_id)
+  } else {
+    // 取消全选
+    selectedSkus.value = []
+  }
+}
+
+// 监听选中状态变化，更新全选状态
+watch(selectedSkus, (newVal) => {
+  isAllSelected.value = newVal.length === skuList.value.items.length && newVal.length > 0
+})
+
+// 添加单个删除方法
+const handleSingleDelete = async (skuId: number) => {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除该商品吗？删除后将同时删除该商品的所有 SKU，此操作不可恢复！',
+      '确认删除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    const response = await axios.delete('http://localhost:8000/api/products/batch', {
+      data: {
+        productIds: [skuId]
+      }
+    })
+
+    if (response.data.success) {
+      ElMessage.success('删除成功')
+      // 刷新列表
+      fetchSkus(
+        selectedBrand.value || undefined,
+        currentPage.value,
+        pageSize.value,
+        searchKeyword.value,
+        sortBy.value
+      )
+      // 从选中列表中移除
+      const index = selectedSkus.value.indexOf(skuId)
+      if (index > -1) {
+        selectedSkus.value.splice(index, 1)
+      }
+    } else {
+      throw new Error(response.data.message)
+    }
+  } catch (error) {
+    if (error instanceof Error) {
+      ElMessage.error('删除失败：' + error.message)
+    }
   }
 }
 
@@ -297,5 +437,35 @@ onMounted(() => {
   margin-top: 20px;
   display: flex;
   justify-content: center;
+}
+
+.left-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.card-selection {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  background-color: rgba(255, 255, 255, 0.8);
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.sku-card {
+  position: relative;
+}
+
+.button-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+:deep(.el-checkbox__label) {
+  font-size: 14px;
 }
 </style> 

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 from typing import List, Optional
@@ -50,6 +50,10 @@ class SkuListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+# 添加批量删除的请求模型
+class BatchDeleteRequest(BaseModel):
+    productIds: List[int]
 
 @app.get("/api/brands", response_model=List[dict])
 async def get_brands():
@@ -260,6 +264,180 @@ async def get_sku_items(sku_id: int):
             })
         
         return results
+    finally:
+        conn.close()
+
+@app.delete("/api/products/batch")
+async def batch_delete_products(request: BatchDeleteRequest):
+    """批量删除商品及其关联的SKU"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        try:
+            # 开启事务
+            cursor.execute("BEGIN TRANSACTION")
+            
+            for product_id in request.productIds:
+                # 1. 删除关联的SKU
+                cursor.execute("""
+                    DELETE FROM c2c_items 
+                    WHERE sku_id IN (
+                        SELECT sku_id 
+                        FROM skus 
+                        WHERE sku_id = ?
+                    )
+                """, (product_id,))
+                
+                # 2. 删除商品SKU
+                cursor.execute("""
+                    DELETE FROM skus 
+                    WHERE sku_id = ?
+                """, (product_id,))
+            
+            # 提交事务
+            cursor.execute("COMMIT")
+            
+            return {
+                "success": True,
+                "message": "删除成功"
+            }
+            
+        except Exception as e:
+            # 如果出错，回滚事务
+            cursor.execute("ROLLBACK")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+    finally:
+        conn.close()
+
+@app.delete("/api/products/{product_id}/skus")
+async def delete_product_skus(product_id: int):
+    """删除指定商品的所有SKU"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        try:
+            # 开启事务
+            cursor.execute("BEGIN TRANSACTION")
+            
+            # 删除关联的SKU
+            cursor.execute("""
+                DELETE FROM c2c_items 
+                WHERE sku_id = ?
+            """, (product_id,))
+            
+            # 提交事务
+            cursor.execute("COMMIT")
+            
+            return {
+                "success": True,
+                "message": "SKU删除成功"
+            }
+            
+        except Exception as e:
+            # 如果出错，回滚事务
+            cursor.execute("ROLLBACK")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+    finally:
+        conn.close()
+
+@app.post("/api/brands")
+async def create_brand(brand: dict):
+    """创建新品牌"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN TRANSACTION")
+            
+            # 插入新品牌
+            cursor.execute("""
+                INSERT INTO brands (name)
+                VALUES (?)
+            """, (brand['name'],))
+            
+            cursor.execute("COMMIT")
+            
+            return {
+                "success": True,
+                "message": "品牌添加成功"
+            }
+            
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
+            
+    finally:
+        conn.close()
+
+@app.delete("/api/brands/{brand_id}")
+async def delete_brand(brand_id: int):
+    """删除品牌"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN TRANSACTION")
+            
+            # 检查是否有关联的商品
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM skus s
+                JOIN c2c_items c ON s.sku_id = c.sku_id
+                WHERE c.brand_id = ?
+            """, (brand_id,))
+            
+            if cursor.fetchone()['count'] > 0:
+                cursor.execute("ROLLBACK")
+                return {
+                    "success": False,
+                    "message": "该品牌下还有商品，不能删除"
+                }
+            
+            # 删除品牌
+            cursor.execute("""
+                DELETE FROM brands
+                WHERE id = ?
+            """, (brand_id,))
+            
+            cursor.execute("COMMIT")
+            
+            return {
+                "success": True,
+                "message": "品牌删除成功"
+            }
+            
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
+            
     finally:
         conn.close()
 

@@ -1,34 +1,85 @@
 <template>
-  <div class="container">
-    <el-container>
-      <el-header>
-        <h1>B站同人商城</h1>
-      </el-header>
-      <el-main>
-        <sku-list />
-      </el-main>
-    </el-container>
+  <div class="app-container">
+    <!-- 固定在顶部的导航栏 -->
+    <div class="nav-header">
+      <div class="nav-buttons">
+        <el-button 
+          :type="currentTab === 'home' ? 'primary' : 'default'"
+          @click="switchTab('home')"
+        >
+          首页
+        </el-button>
+        <el-button 
+          :type="currentTab === 'brand' ? 'primary' : 'default'"
+          @click="switchTab('brand')"
+        >
+          品牌管理
+        </el-button>
+      </div>
+    </div>
+
+    <!-- 主内容区域 -->
+    <div class="main-container">
+      <div class="content-wrapper">
+        <sku-list v-if="currentTab === 'home'" />
+        <brand-manage v-else />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import SkuList from './components/SkuList.vue'
+import BrandManage from './components/BrandManage.vue'
+
+const currentTab = ref('home')
+
+const switchTab = (tab: 'home' | 'brand') => {
+  currentTab.value = tab
+}
 </script>
 
 <style>
-.container {
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.nav-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 60px;
+  background-color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.nav-buttons {
+  display: flex;
+  gap: 16px;
+}
+
+.main-container {
+  margin-top: 60px; /* 与导航栏高度相同 */
+  flex: 1;
+  background-color: #f5f7fa;
+  min-height: calc(100vh - 60px);
+}
+
+.content-wrapper {
   max-width: 1200px;
   margin: 0 auto;
   padding: 20px;
 }
 
-.el-header {
-  text-align: center;
-  padding: 20px 0;
-}
-
-h1 {
-  color: #409EFF;
-  margin: 0;
+:deep(.el-button) {
+  min-width: 100px;
 }
 </style>
