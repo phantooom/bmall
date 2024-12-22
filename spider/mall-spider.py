@@ -16,6 +16,7 @@ class BiliMallSpider:
         self.fatal_sleep = 60  # 严重错误休眠时间(秒)
         self.round_sleep = 300  # 每轮结束后的休眠时间(秒)，默认5分钟
         self.url = 'https://mall.bilibili.com/mall-magic-c/internet/c2c/v2/list'
+        self.category = "2312"  # 商品分类ID
         self.headers = {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -159,7 +160,8 @@ class BiliMallSpider:
         """获取数据"""
         data = {
             "sortType": "TIME_DESC",
-            "nextId": next_id if next_id else ""
+            "nextId": next_id if next_id else "",
+            "categoryFilter": self.category
         }
         
         delay = random.uniform(self.min_sleep, self.max_sleep)
@@ -201,6 +203,11 @@ class BiliMallSpider:
         try:
             # 检查是否已存在
             existing_item = self.check_item_exists(item['c2cItemsId'])
+            
+            # 检查商品类型
+            if item['type'] != 1:
+                print(f"商品 {item['c2cItemsId']} 类型不是1，跳过")
+                return False
             
             # 检查是否有多个SKU
             if len(item['detailDtoList']) > 1:
@@ -303,6 +310,7 @@ class BiliMallSpider:
             new_items_count = 0
             updated_items_count = 0  # 记录更新的商品数量
             skipped_items = 0  # 记录跳过的多SKU商品数量
+            skipped_type_items = 0  # 记录跳过的非类型1商品数量
             self.duplicate_count = 0  # 重置重复计数
             
             print("\n=== 开始新一轮爬取 ===")
@@ -335,6 +343,9 @@ class BiliMallSpider:
                     page_skipped_items = 0
                     
                     for item in items:
+                        if item['type'] != 1:
+                            skipped_type_items += 1
+                            continue
                         if len(item['detailDtoList']) > 1:
                             page_skipped_items += 1
                             continue
@@ -356,7 +367,11 @@ class BiliMallSpider:
                     page += 1
                     
                     print(f"当前进度: {page}/{max_pages} 页")
-                    print(f"已爬取商品总数: {total_items}, 新增商品数: {new_items_count}, 跳过多SKU商品: {skipped_items}")
+                    print(f"已爬取商品总数: {total_items}")
+                    print(f"新增商品数: {new_items_count}")
+                    print(f"更新商品数: {updated_items_count}")
+                    print(f"跳过多SKU商品: {skipped_items}")
+                    print(f"跳过非类型1商品: {skipped_type_items}")
                     print(f"连续重复页数: {self.duplicate_count}/{self.max_duplicate_pages}")
                     
                 except Exception as e:
@@ -380,6 +395,8 @@ class BiliMallSpider:
             print(f"新增商品数: {new_items_count}")
             print(f"更新商品数: {updated_items_count}")
             print(f"跳过多SKU商品: {skipped_items}")
+            print(f"跳过非类型1商品: {skipped_type_items}")
+            print(f"连续重复页数: {self.duplicate_count}/{self.max_duplicate_pages}")
             print(f"等待{self.round_sleep}秒（{self.round_sleep/60:.1f}分钟）后开始下一轮爬取...")
             time.sleep(self.round_sleep)
 
@@ -400,6 +417,7 @@ if __name__ == "__main__":
     parser.add_argument('--error-sleep', type=int, default=30, help='错误重试休眠时间(秒)，默认30秒')
     parser.add_argument('--fatal-sleep', type=int, default=60, help='严重错误休眠时间(秒)，默认60秒')
     parser.add_argument('--round-sleep', type=int, default=300, help='每轮结束后的休眠时间(秒)，默认300秒')
+    parser.add_argument('--category', type=str, default="2312", help='商品分类ID，默认2312')
     args = parser.parse_args()
 
     spider = BiliMallSpider(cookie=args.cookie)
@@ -409,6 +427,7 @@ if __name__ == "__main__":
     spider.error_sleep = args.error_sleep
     spider.fatal_sleep = args.fatal_sleep
     spider.round_sleep = args.round_sleep
+    spider.category = args.category
     try:
         spider.run(max_pages=args.pages)
     finally:
