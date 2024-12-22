@@ -1,2 +1,0 @@
-# bmall
-bilibili mall
